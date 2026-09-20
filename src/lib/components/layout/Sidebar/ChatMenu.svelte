@@ -30,7 +30,7 @@
 	import TrashIcon from './icons/Trash.svelte';
 	import ChatCheckIcon from '$lib/components/icons/ChatCheck.svelte';
 
-	const i18n = getContext('i18n');
+	const i18n: any = getContext('i18n');
 
 	export let shareHandler: Function;
 	export let moveChatHandler: Function;
@@ -44,6 +44,8 @@
 	export let markUnreadHandler: Function = () => {};
 
 	export let chatId = '';
+	export let allowClone = true;
+	export let allowShare = true;
 
 	let dropdown: Dropdown;
 	let show = false;
@@ -308,7 +310,7 @@
 
 	<div slot="content">
 		<DropdownMenu className="select-none min-w-[12.5rem] transition">
-			{#if $user?.role === 'admin' || ($user.permissions?.chat?.share ?? true)}
+			{#if allowShare && ($user?.role === 'admin' || ($user?.permissions?.chat?.share ?? true))}
 				<button
 					draggable="false"
 					class="flex h-[1.6875rem] gap-2 items-center rounded-xl px-2 text-[0.8125rem] cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-900 w-full"
@@ -407,7 +409,7 @@
 				{/if}
 			</button>
 
-			{#if $user?.role === 'admin' || ($user?.permissions?.chat?.import ?? true)}
+			{#if allowClone && ($user?.role === 'admin' || ($user?.permissions?.chat?.import ?? true))}
 				<button
 					draggable="false"
 					class="flex h-[1.6875rem] gap-2 items-center rounded-xl px-2 text-[0.8125rem] cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-900 w-full"

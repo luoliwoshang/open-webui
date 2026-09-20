@@ -1947,6 +1947,19 @@ USER_PERMISSIONS_FEATURES_USER_WEBHOOKS = (
     os.getenv('USER_PERMISSIONS_FEATURES_USER_WEBHOOKS', 'False').lower() == 'true'
 )
 
+USER_PERMISSIONS_FEATURES_AGENT_MODE = (
+    os.getenv('USER_PERMISSIONS_FEATURES_AGENT_MODE', 'False').lower() == 'true'
+)
+
+AGENTAPI_ENABLED = os.getenv('AGENTAPI_ENABLED', 'False').lower() == 'true'
+AGENTAPI_BASE_URL = os.getenv('AGENTAPI_BASE_URL', 'https://agent.qiniuapi.com').rstrip('/')
+AGENTAPI_API_KEY = os.getenv('AGENTAPI_API_KEY', '')
+try:
+    AGENTAPI_PROFILES = JSONCodec.loads(os.getenv('AGENTAPI_PROFILES', '[]'))
+except Exception:
+    log.warning('Invalid AGENTAPI_PROFILES JSON; using an empty profile list')
+    AGENTAPI_PROFILES = []
+
 
 USER_PERMISSIONS_SETTINGS_INTERFACE = os.getenv('USER_PERMISSIONS_SETTINGS_INTERFACE', 'True').lower() == 'true'
 
@@ -2027,6 +2040,7 @@ DEFAULT_USER_PERMISSIONS = {
         'automations': USER_PERMISSIONS_FEATURES_AUTOMATIONS,
         'calendar': USER_PERMISSIONS_FEATURES_CALENDAR,
         'webhooks': USER_PERMISSIONS_FEATURES_USER_WEBHOOKS,
+        'agent_mode': USER_PERMISSIONS_FEATURES_AGENT_MODE,
     },
     'settings': {
         'interface': USER_PERMISSIONS_SETTINGS_INTERFACE,
@@ -2833,6 +2847,10 @@ ENABLE_LDAP_GROUP_CREATION = os.getenv('ENABLE_LDAP_GROUP_CREATION', 'False').lo
 LDAP_ATTRIBUTE_FOR_GROUPS = os.getenv('LDAP_ATTRIBUTE_FOR_GROUPS', 'memberOf')
 
 DEFAULT_CONFIG = {
+    'agentapi.enabled': AGENTAPI_ENABLED,
+    'agentapi.base_url': AGENTAPI_BASE_URL,
+    'agentapi.api_key': AGENTAPI_API_KEY,
+    'agentapi.profiles': AGENTAPI_PROFILES,
     'direct.enable': ENABLE_DIRECT_CONNECTIONS,
     'ollama.enable': ENABLE_OLLAMA_API,
     'ollama.base_urls': OLLAMA_BASE_URLS,

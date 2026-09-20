@@ -71,6 +71,7 @@
 	export let updatedAt: number | null = null;
 	export let lastReadAt: number | null = null;
 	export let active = false;
+	export let mode: 'chat' | 'agent' = 'chat';
 
 	export let selected = false;
 	export let shiftKey = false;
@@ -81,6 +82,8 @@
 	export let onReadStateChange: (data: Record<string, unknown>) => void = () => {};
 
 	export let onDragEnd = () => {};
+
+	$: chatHref = mode === 'agent' ? `/a/${id}` : `/c/${id}`;
 
 	function formatTimeAgo(timestamp: number): string {
 		const now = Date.now();
@@ -164,7 +167,7 @@
 
 		if ($mobile) {
 			event?.preventDefault();
-			void goto(`/c/${id}`);
+			void goto(chatHref);
 			showSidebar.set(false);
 		}
 	};
@@ -540,6 +543,12 @@
 				? 'font-normal text-gray-800 dark:text-gray-200'
 				: ''} {($mobile || showInlineActions) && !readonly ? 'pr-12' : ''}"
 		>
+			{#if mode === 'agent'}
+				<span
+					class="mr-1.5 rounded bg-violet-100 px-1 py-px text-[0.5625rem] font-medium text-violet-700 dark:bg-violet-950 dark:text-violet-300"
+					>A</span
+				>
+			{/if}
 			{title}
 		</div>
 	</div>
@@ -641,7 +650,7 @@
 		<a
 			id="sidebar-chat-item"
 			class={chatItemClass}
-			href="/c/{id}"
+			href={chatHref}
 			aria-current={id === $chatId ? 'page' : undefined}
 			on:click={selectChatHandler}
 			draggable="false"
@@ -658,7 +667,7 @@
 			<LinkPreview.Trigger
 				id="sidebar-chat-item"
 				class={chatItemClass}
-				href="/c/{id}"
+				href={chatHref}
 				aria-current={id === $chatId ? 'page' : undefined}
 				onclick={selectChatHandler}
 				ondblclick={renameChatFromDoubleClick}
@@ -739,6 +748,8 @@
 				<div class="flex self-center z-10 items-end">
 					<ChatMenu
 						chatId={id}
+						allowClone={mode !== 'agent'}
+						allowShare={mode !== 'agent'}
 						cloneChatHandler={() => {
 							cloneChatHandler(id);
 						}}

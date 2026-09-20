@@ -274,6 +274,7 @@ class ChatPermissions(BaseModel):
 
 class FeaturesPermissions(BaseModel):
     api_keys: bool = False
+    agent_mode: bool = False
     notes: bool = True
     channels: bool = True
     folders: bool = True

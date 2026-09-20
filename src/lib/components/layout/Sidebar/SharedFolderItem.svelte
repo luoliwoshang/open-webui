@@ -126,6 +126,7 @@
 						updatedAt={chat.updated_at}
 						lastReadAt={chat.last_read_at}
 						active={chat.active ?? false}
+						mode={chat.mode ?? 'chat'}
 						ownerName={chat.owner_name}
 						ownerUserId={chat.user_id}
 						readonly={chat.readonly ?? !isWritable}

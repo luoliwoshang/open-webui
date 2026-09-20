@@ -143,6 +143,7 @@ from open_webui.models.messages import Messages
 from open_webui.models.models import Models, normalize_model_tags
 from open_webui.models.users import Users
 from open_webui.routers import (
+    agentapi,
     analytics,
     audio,
     auths,
@@ -835,6 +836,7 @@ app.include_router(users.router, prefix='/api/v1/users', tags=['users'])
 
 
 app.include_router(channels.router, prefix='/api/v1/channels', tags=['channels'])
+app.include_router(agentapi.router, prefix='/api/v1/agentapi', tags=['agentapi'])
 app.include_router(chats.router, prefix='/api/v1/chats', tags=['chats'])
 app.include_router(notes.router, prefix='/api/v1/notes', tags=['notes'])
 
@@ -1089,6 +1091,15 @@ async def chat_completion(
     form_data: dict,
     user=Depends(get_verified_user),
 ):
+    requested_chat_id = form_data.get('chat_id')
+    if requested_chat_id and is_saved_chat_id(requested_chat_id):
+        requested_chat = await Chats.get_chat_by_id(requested_chat_id)
+        if requested_chat and requested_chat.mode == 'agent':
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail='Agent conversations must use the native AgentAPI message endpoint.',
+            )
+
     if not request.app.state.MODELS:
         await get_all_models(request, user=user)
 
@@ -2241,6 +2252,7 @@ async def get_app_config(request: Request):
         'calendar.enable',
         'automations.enable',
         'notes.enable',
+        'agentapi.enabled',
         'chat.context_compaction.enable',
         'chat.tool_permissions.enable',
         'web.search.enable',
@@ -2324,6 +2336,7 @@ async def get_app_config(request: Request):
                     'enable_calendar': config.get('calendar.enable'),
                     'enable_automations': config.get('automations.enable'),
                     'enable_notes': config.get('notes.enable'),
+                    'enable_agent_mode': config.get('agentapi.enabled'),
                     'enable_context_compaction': config.get('chat.context_compaction.enable'),
                     'enable_tool_permissions': config.get('chat.tool_permissions.enable'),
                     'enable_web_search': config.get('web.search.enable'),

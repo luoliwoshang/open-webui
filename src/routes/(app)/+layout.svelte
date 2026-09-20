@@ -231,7 +231,7 @@
 		const nextChat = currentIndex === -1 ? $chats[0] : $chats[currentIndex + direction];
 
 		if (nextChat) {
-			await goto(`/c/${nextChat.id}`);
+			await goto(nextChat.mode === 'agent' ? `/a/${nextChat.id}` : `/c/${nextChat.id}`);
 		}
 	};
 

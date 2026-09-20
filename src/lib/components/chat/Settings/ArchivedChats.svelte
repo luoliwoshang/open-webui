@@ -316,7 +316,7 @@
 							on:click={(event) => {
 								event.preventDefault();
 								showSettings.set(false);
-								goto(`/c/${chat.id}`);
+								goto(chat.mode === 'agent' ? `/a/${chat.id}` : `/c/${chat.id}`);
 							}}
 						>
 							{chat?.title}

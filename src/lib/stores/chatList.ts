@@ -3,6 +3,13 @@ import { getChatList, getPinnedChatList } from '$lib/apis/chats';
 
 type ChatListItem = {
 	id: string;
+	title?: string;
+	mode?: 'chat' | 'agent';
+	created_at?: number;
+	updated_at?: number;
+	last_read_at?: number | null;
+	active?: boolean;
+	time_range?: string;
 	[key: string]: unknown;
 };
 

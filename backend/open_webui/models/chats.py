@@ -133,6 +133,7 @@ class Chat(Base):  # database table mapping for chat entity
     user_id = Column(String, index=True)  # owner user id
     title = Column(Text)  # user-visible conversation title
     chat = Column(JSON)
+    mode = Column(String, nullable=False, default='chat', server_default='chat')
 
     created_at = Column(BigInteger, index=True)  # conversation creation timestamp
     updated_at = Column(BigInteger, index=True)  # conversation modification timestamp
@@ -158,6 +159,7 @@ class Chat(Base):  # database table mapping for chat entity
         Index('user_id_pinned_idx', 'user_id', 'pinned'),
         Index('user_id_archived_idx', 'user_id', 'archived'),
         Index('updated_at_user_id_idx', 'updated_at', 'user_id'),
+        Index('user_id_mode_updated_at_idx', 'user_id', 'mode', updated_at.desc()),
         Index('folder_id_user_id_idx', 'folder_id', 'user_id'),
         Index('user_id_updated_at_id_idx', 'user_id', updated_at.desc(), 'id'),
         Index(
@@ -189,6 +191,7 @@ class ChatModel(BaseModel):
     user_id: str
     title: str
     chat: dict
+    mode: Literal['chat', 'agent'] = 'chat'
 
     created_at: int  # timestamp in epoch
     updated_at: int  # timestamp in epoch
@@ -281,6 +284,7 @@ class ChatResponse(BaseModel):
     user_id: str
     title: str
     chat: dict
+    mode: Literal['chat', 'agent'] = 'chat'
     updated_at: int  # timestamp in epoch
     created_at: int  # timestamp in epoch
     share_id: str | None = None  # id of the chat to be shared
@@ -306,6 +310,7 @@ class ChatTitleIdResponse(BaseModel):
     title: str
     updated_at: int
     created_at: int
+    mode: Literal['chat', 'agent'] = 'chat'
     last_read_at: int | None = None
     snippet: str | None = None
     active: bool = False
@@ -544,6 +549,7 @@ class ChatTable:
         form_data: ChatForm,
         db: AsyncSession | None = None,
         *,
+        mode: Literal['chat', 'agent'] = 'chat',
         internal_meta: dict | None = None,
         timer_at: int | None = None,
     ) -> ChatModel | None:
@@ -556,6 +562,7 @@ class ChatTable:
                         form_data.chat['title'] if 'title' in form_data.chat else 'New Chat'
                     ),
                     'chat': self._clean_null_bytes(form_data.chat),
+                    'mode': mode,
                     'folder_id': form_data.folder_id,
                     'meta': internal_meta or {},
                     'timer_at': timer_at,
@@ -778,6 +785,31 @@ class ChatTable:
         except Exception:
             return None
 
+    async def update_chat_meta_by_id(
+        self,
+        id: str,
+        meta: dict,
+        db: AsyncSession | None = None,
+        *,
+        touch: bool = False,
+    ) -> ChatModel | None:
+        """Replace server-owned chat metadata without changing the conversation mode."""
+        try:
+            async with get_async_db_context(db) as session:
+                chat_item = await session.get(Chat, id)
+                if chat_item is None:
+                    return None
+
+                chat_item.meta = self._clean_null_bytes(meta)
+                if touch:
+                    chat_item.updated_at = int(time.time())
+
+                await session.commit()
+                return ChatModel.model_validate(chat_item)
+        except Exception:
+            log.exception('Failed to update metadata for chat %s', id)
+            return None
+
     async def update_chat_last_read_at_by_id(
         self, id: str, user_id: str, db: AsyncSession | None = None
     ) -> tuple[int, bool] | None:
@@ -808,6 +840,7 @@ class ChatTable:
                         title=chat.title,
                         updated_at=chat.updated_at,
                         created_at=chat.created_at,
+                        mode=chat.mode,
                         last_read_at=chat.last_read_at,
                     )
                 return None
@@ -1420,7 +1453,7 @@ class ChatTable:
         db: AsyncSession | None = None,
     ) -> list[ChatTitleIdResponse]:
         async with get_async_db_context(db) as session:
-            stmt = select(Chat.id, Chat.title, Chat.updated_at, Chat.created_at).filter_by(
+            stmt = select(Chat.id, Chat.title, Chat.updated_at, Chat.created_at, Chat.mode).filter_by(
                 user_id=user_id, archived=True
             )
             stmt = stmt.where(Chat.meta['internal'].as_boolean().is_not(True))
@@ -1460,6 +1493,7 @@ class ChatTable:
                         'title': chat[1],
                         'updated_at': chat[2],
                         'created_at': chat[3],
+                        'mode': chat[4],
                     }
                 )
                 for chat in all_chats
@@ -1498,7 +1532,9 @@ class ChatTable:
         db: AsyncSession | None = None,
     ) -> list[ChatTitleIdResponse]:
         async with get_async_db_context(db) as session:
-            stmt = select(Chat.id, Chat.title, Chat.updated_at, Chat.created_at, Chat.last_read_at).filter_by(
+            stmt = select(
+                Chat.id, Chat.title, Chat.updated_at, Chat.created_at, Chat.last_read_at, Chat.mode
+            ).filter_by(
                 user_id=user_id
             )
             stmt = stmt.where(Chat.meta['internal'].as_boolean().is_not(True))
@@ -1538,6 +1574,7 @@ class ChatTable:
                         'updated_at': chat[2],
                         'created_at': chat[3],
                         'last_read_at': chat[4],
+                        'mode': chat[5],
                     }
                 )
                 for chat in all_chats
@@ -1556,7 +1593,9 @@ class ChatTable:
         db: AsyncSession | None = None,
     ) -> list[ChatTitleIdResponse]:
         async with get_async_db_context(db) as session:
-            stmt = select(Chat.id, Chat.title, Chat.updated_at, Chat.created_at, Chat.last_read_at).filter_by(
+            stmt = select(
+                Chat.id, Chat.title, Chat.updated_at, Chat.created_at, Chat.last_read_at, Chat.mode
+            ).filter_by(
                 user_id=user_id
             )
             stmt = stmt.where(Chat.meta['internal'].as_boolean().is_not(True))
@@ -1588,6 +1627,7 @@ class ChatTable:
                         'updated_at': chat[2],
                         'created_at': chat[3],
                         'last_read_at': chat[4],
+                        'mode': chat[5],
                     }
                 )
                 for chat in all_chats
@@ -1936,7 +1976,9 @@ class ChatTable:
         self, user_id: str, db: AsyncSession | None = None
     ) -> list[ChatTitleIdResponse]:
         async with get_async_db_context(db) as session:
-            stmt = select(Chat.id, Chat.title, Chat.updated_at, Chat.created_at, Chat.last_read_at).filter_by(
+            stmt = select(
+                Chat.id, Chat.title, Chat.updated_at, Chat.created_at, Chat.last_read_at, Chat.mode
+            ).filter_by(
                 user_id=user_id, pinned=True, archived=False
             )
             stmt = stmt.where(Chat.meta['internal'].as_boolean().is_not(True))
@@ -1950,6 +1992,7 @@ class ChatTable:
                         'updated_at': chat[2],
                         'created_at': chat[3],
                         'last_read_at': chat[4],
+                        'mode': chat[5],
                     }
                 )
                 for chat in all_chats
@@ -2167,7 +2210,7 @@ class ChatTable:
     ) -> list[ChatTitleIdResponse]:
         async with get_async_db_context(db) as session:
             stmt = (
-                select(Chat.id, Chat.title, Chat.updated_at, Chat.created_at, Chat.last_read_at)
+                select(Chat.id, Chat.title, Chat.updated_at, Chat.created_at, Chat.last_read_at, Chat.mode)
                 .filter_by(folder_id=folder_id, user_id=user_id)
                 .filter(or_(Chat.pinned == False, Chat.pinned == None))
                 .filter_by(archived=False)
@@ -2190,6 +2233,7 @@ class ChatTable:
                         'updated_at': chat[2],
                         'created_at': chat[3],
                         'last_read_at': chat[4],
+                        'mode': chat[5],
                     }
                 )
                 for chat in all_chats
@@ -2208,7 +2252,15 @@ class ChatTable:
         """Get chats in a folder across ALL users. Returns dicts with user_id."""
         async with get_async_db_context(db) as session:
             stmt = (
-                select(Chat.id, Chat.title, Chat.user_id, Chat.updated_at, Chat.created_at, Chat.last_read_at)
+                select(
+                    Chat.id,
+                    Chat.title,
+                    Chat.user_id,
+                    Chat.updated_at,
+                    Chat.created_at,
+                    Chat.last_read_at,
+                    Chat.mode,
+                )
                 .filter_by(folder_id=folder_id)
                 .filter(or_(Chat.pinned == False, Chat.pinned == None))
                 .filter_by(archived=False)
@@ -2231,6 +2283,7 @@ class ChatTable:
                     'updated_at': chat[3],
                     'created_at': chat[4],
                     'last_read_at': chat[5],
+                    'mode': chat[6],
                 }
                 for chat in all_chats
             ]
@@ -2307,7 +2360,9 @@ class ChatTable:
         db: AsyncSession | None = None,
     ) -> list[ChatTitleIdResponse]:
         async with get_async_db_context(db) as session:
-            stmt = select(Chat.id, Chat.title, Chat.updated_at, Chat.created_at, Chat.last_read_at).filter_by(
+            stmt = select(
+                Chat.id, Chat.title, Chat.updated_at, Chat.created_at, Chat.last_read_at, Chat.mode
+            ).filter_by(
                 user_id=user_id
             )
             stmt = stmt.where(Chat.meta['internal'].as_boolean().is_not(True))
@@ -2344,6 +2399,7 @@ class ChatTable:
                         'updated_at': chat[2],
                         'created_at': chat[3],
                         'last_read_at': chat[4],
+                        'mode': chat[5],
                     }
                 )
                 for chat in all_chats
