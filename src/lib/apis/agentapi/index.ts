@@ -33,6 +33,15 @@ export type AgentAPIEvent = {
 	[key: string]: unknown;
 };
 
+export type AgentFile = {
+	id: string;
+	filename: string;
+	mime_type?: string | null;
+	size_bytes?: number | null;
+	created_at?: string | null;
+	downloadable: boolean;
+};
+
 export type AgentChatRecord = {
 	id: string;
 	user_id: string;
@@ -122,6 +131,23 @@ export const createAgentChat = (token: string, profileId: string, title: string 
 
 export const interruptAgentChat = (token: string, chatId: string) =>
 	jsonRequest<{ status: boolean }>(token, `/chats/${chatId}/interrupt`, { method: 'POST' });
+
+export const getAgentFiles = (token: string, chatId: string) =>
+	jsonRequest<AgentFile[]>(token, `/chats/${encodeURIComponent(chatId)}/files`);
+
+export const downloadAgentFile = async (token: string, chatId: string, fileId: string) => {
+	const response = await fetch(
+		`${WEBUI_API_BASE_URL}/agentapi/chats/${encodeURIComponent(chatId)}/files/${encodeURIComponent(fileId)}/content`,
+		{
+			headers: {
+				Accept: '*/*',
+				...(token ? { authorization: `Bearer ${token}` } : {})
+			}
+		}
+	);
+	if (!response.ok) throw new Error(detail(await response.json().catch(() => ({}))));
+	return response.blob();
+};
 
 export const streamAgentMessage = async (
 	token: string,

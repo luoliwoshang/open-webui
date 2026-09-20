@@ -165,6 +165,68 @@ async def verify_connection(*, base_url: str, api_key: str) -> None:
             await _raise_for_status(response)
 
 
+async def list_session_files(*, base_url: str, api_key: str, session_id: str) -> list[dict[str, Any]]:
+    """List every file scoped to a Session, following AgentAPI cursors."""
+    timeout = aiohttp.ClientTimeout(total=60, connect=15)
+    files: list[dict[str, Any]] = []
+    page: str | None = None
+    seen_pages: set[str] = set()
+
+    async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
+        while True:
+            params: dict[str, Any] = {'scope_id': session_id, 'limit': 1000}
+            if page:
+                params['page'] = page
+            async with session.get(_url(base_url, '/v1/files'), headers=_headers(api_key), params=params) as response:
+                await _raise_for_status(response)
+                payload = await response.json()
+
+            if not isinstance(payload, dict):
+                raise AgentAPIError('AgentAPI returned an invalid file list')
+            data = payload.get('data')
+            if isinstance(data, list):
+                files.extend(item for item in data if isinstance(item, dict))
+
+            next_page = payload.get('next_page')
+            if not next_page:
+                return files
+            page = str(next_page)
+            if page in seen_pages:
+                raise AgentAPIError('AgentAPI returned a repeated file-list cursor')
+            seen_pages.add(page)
+
+
+async def get_file(*, base_url: str, api_key: str, file_id: str) -> dict[str, Any]:
+    timeout = aiohttp.ClientTimeout(total=30, connect=15)
+    async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
+        async with session.get(
+            _url(base_url, f'/v1/files/{quote(file_id, safe="")}'), headers=_headers(api_key)
+        ) as response:
+            await _raise_for_status(response)
+            payload = await response.json()
+    if not isinstance(payload, dict):
+        raise AgentAPIError('AgentAPI returned invalid file metadata')
+    return payload
+
+
+async def stream_file_content(*, base_url: str, api_key: str, file_id: str) -> AsyncIterator[bytes]:
+    """Stream a file through Open WebUI without exposing the AgentAPI key."""
+    timeout = aiohttp.ClientTimeout(total=None, connect=15, sock_read=900)
+    session = aiohttp.ClientSession(timeout=timeout, trust_env=True)
+    try:
+        response = await session.get(
+            _url(base_url, f'/v1/files/{quote(file_id, safe="")}/content'), headers=_headers(api_key)
+        )
+        try:
+            await _raise_for_status(response)
+            async for chunk in response.content.iter_chunked(64 * 1024):
+                yield chunk
+        finally:
+            response.release()
+    finally:
+        await session.close()
+
+
 async def send_events(*, base_url: str, api_key: str, session_id: str, events: list[dict[str, Any]]) -> dict[str, Any]:
     timeout = aiohttp.ClientTimeout(total=60, connect=15)
     async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:

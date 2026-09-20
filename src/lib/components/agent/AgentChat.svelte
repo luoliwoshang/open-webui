@@ -9,11 +9,18 @@
 	import { getChatById } from '$lib/apis/chats';
 	import {
 		createAgentChat,
+		downloadAgentFile,
+		getAgentFiles,
 		getAgentProfiles,
 		interruptAgentChat,
 		streamAgentMessage
 	} from '$lib/apis/agentapi';
-	import type { AgentAPIEvent, AgentChatRecord, AgentProfileSummary } from '$lib/apis/agentapi';
+	import type {
+		AgentAPIEvent,
+		AgentChatRecord,
+		AgentFile,
+		AgentProfileSummary
+	} from '$lib/apis/agentapi';
 	import Markdown from '$lib/components/chat/Messages/Markdown.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import { chatId, chatTitle, config, showSidebar, user } from '$lib/stores';
@@ -42,6 +49,10 @@
 	let running = false;
 	let interrupting = false;
 	let activity: AgentAPIEvent[] = [];
+	let files: AgentFile[] = [];
+	let filesLoading = false;
+	let downloadingFileId = '';
+	let fileRefreshTimers: ReturnType<typeof setTimeout>[] = [];
 	let messagesElement: HTMLDivElement;
 
 	$: selectedProfile = profiles.find((profile) => profile.id === selectedProfileId);
@@ -58,6 +69,77 @@
 
 	const messageError = (error: AgentMessage['error']) =>
 		typeof error === 'string' ? error : (error?.content ?? '');
+
+	const formatFileSize = (size: number | null | undefined) => {
+		if (typeof size !== 'number' || size < 0) return '';
+		if (size < 1024) return `${size} B`;
+		const units = ['KB', 'MB', 'GB', 'TB'];
+		let value = size / 1024;
+		let unit = 0;
+		while (value >= 1024 && unit < units.length - 1) {
+			value /= 1024;
+			unit += 1;
+		}
+		return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${units[unit]}`;
+	};
+
+	const formatCreatedAt = (createdAt: string | null | undefined) => {
+		if (!createdAt) return '';
+		const timestamp = Date.parse(createdAt);
+		return Number.isNaN(timestamp) ? createdAt : new Date(timestamp).toLocaleString();
+	};
+
+	const fileDetails = (file: AgentFile) =>
+		[file.mime_type, formatFileSize(file.size_bytes), formatCreatedAt(file.created_at)]
+			.filter(Boolean)
+			.join(' · ');
+
+	const clearFileRefreshTimers = () => {
+		for (const timer of fileRefreshTimers) clearTimeout(timer);
+		fileRefreshTimers = [];
+	};
+
+	const loadFiles = async (showError = true) => {
+		if (!chat?.id) {
+			files = [];
+			return;
+		}
+		filesLoading = true;
+		try {
+			files = await getAgentFiles(localStorage.token, chat.id);
+		} catch (error) {
+			if (showError) toast.error(`${error}`);
+		} finally {
+			filesLoading = false;
+		}
+	};
+
+	const refreshFilesAfterTurn = () => {
+		clearFileRefreshTimers();
+		void loadFiles(false);
+		fileRefreshTimers = [2000, 5000].map((delay) => setTimeout(() => void loadFiles(false), delay));
+	};
+
+	const downloadFile = async (file: AgentFile) => {
+		if (!chat?.id || !file.downloadable || downloadingFileId) return;
+		downloadingFileId = file.id;
+		let objectUrl = '';
+		try {
+			const blob = await downloadAgentFile(localStorage.token, chat.id, file.id);
+			objectUrl = URL.createObjectURL(blob);
+			const anchor = document.createElement('a');
+			anchor.href = objectUrl;
+			anchor.download = file.filename.split(/[/\\]/).pop() || 'download';
+			document.body.appendChild(anchor);
+			anchor.click();
+			anchor.remove();
+		} catch (error) {
+			toast.error(`${error}`);
+		} finally {
+			if (objectUrl) URL.revokeObjectURL(objectUrl);
+			downloadingFileId = '';
+		}
+	};
 
 	const load = async () => {
 		loaded = false;
@@ -83,9 +165,11 @@
 					.reverse()
 					.find((message) => message.role === 'assistant');
 				activity = lastAssistant?.meta?.agentapi?.events ?? [];
+				await loadFiles(false);
 			} else {
 				chatId.set('');
 				chatTitle.set($i18n.t('New Agent Chat'));
+				files = [];
 			}
 		} catch (error) {
 			toast.error(`${error}`);
@@ -170,6 +254,7 @@
 		} finally {
 			running = false;
 			interrupting = false;
+			if (chat?.id) refreshFilesAfterTurn();
 			scrollToBottom();
 		}
 	};
@@ -187,6 +272,7 @@
 
 	onMount(load);
 	onDestroy(() => {
+		clearFileRefreshTimers();
 		if ($chatId === chat?.id) {
 			chatId.set('');
 			chatTitle.set('');
@@ -297,6 +383,60 @@
 								</div>{/each}
 						</div>
 					</details>
+				{/if}
+
+				{#if chat}
+					<section
+						class="rounded-xl border border-gray-100 bg-gray-50/60 p-3 dark:border-gray-900 dark:bg-gray-900/30"
+					>
+						<div class="flex items-center justify-between gap-3">
+							<div class="text-xs font-medium">{$i18n.t('Session files')}</div>
+							<button
+								type="button"
+								class="text-xs text-gray-500 hover:text-gray-900 disabled:opacity-50 dark:hover:text-gray-100"
+								disabled={filesLoading}
+								on:click={() => loadFiles()}
+							>
+								{filesLoading ? $i18n.t('Refreshing...') : $i18n.t('Refresh')}
+							</button>
+						</div>
+
+						{#if files.length > 0}
+							<div class="mt-2 divide-y divide-gray-200 dark:divide-gray-800">
+								{#each files as file (file.id)}
+									<div class="flex items-center gap-3 py-2">
+										<div class="min-w-0 flex-1">
+											<div class="truncate text-xs font-medium" title={file.filename}>
+												{file.filename}
+											</div>
+											{#if fileDetails(file)}
+												<div class="mt-0.5 truncate text-[0.6875rem] text-gray-400">
+													{fileDetails(file)}
+												</div>
+											{/if}
+										</div>
+										<button
+											type="button"
+											class="shrink-0 rounded-lg border border-gray-200 px-2.5 py-1 text-xs hover:bg-white disabled:cursor-not-allowed disabled:opacity-50 dark:border-gray-800 dark:hover:bg-gray-900"
+											disabled={!file.downloadable || !!downloadingFileId}
+											on:click={() => downloadFile(file)}
+										>
+											{downloadingFileId === file.id
+												? $i18n.t('Downloading...')
+												: file.downloadable
+													? $i18n.t('Download')
+													: $i18n.t('Unavailable')}
+										</button>
+									</div>
+								{/each}
+							</div>
+						{:else if !filesLoading}
+							<p class="mt-2 text-xs text-gray-400">
+								{$i18n.t('No files yet. Ask the Agent to save deliverables in')}
+								<code>/mnt/session/outputs/</code>.
+							</p>
+						{/if}
+					</section>
 				{/if}
 			</div>
 		</div>

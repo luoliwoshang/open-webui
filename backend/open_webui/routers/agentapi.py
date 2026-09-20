@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from typing import Any
+from urllib.parse import quote
 from uuid import uuid4
 
 import aiohttp
@@ -26,9 +28,12 @@ from open_webui.utils.agentapi import (
     create_session,
     delete_session,
     event_text,
+    get_file,
     get_session,
+    list_session_files,
     send_events,
     start_agent_turn,
+    stream_file_content,
     stream_turn_events,
     verify_connection,
 )
@@ -167,6 +172,29 @@ def _event_summary(event: dict[str, Any]) -> dict[str, Any]:
         if key in event:
             summary[key] = event[key]
     return summary
+
+
+def _public_file(file: dict[str, Any]) -> dict[str, Any]:
+    return {
+        'id': file.get('id'),
+        'filename': file.get('filename') or 'download',
+        'mime_type': file.get('mime_type'),
+        'size_bytes': file.get('size_bytes'),
+        'created_at': file.get('created_at'),
+        'downloadable': file.get('downloadable', True),
+    }
+
+
+def _file_belongs_to_session(file: dict[str, Any], session_id: str) -> bool:
+    scope = file.get('scope')
+    return isinstance(scope, dict) and str(scope.get('id') or '') == session_id
+
+
+def _safe_media_type(value: Any) -> str:
+    media_type = str(value or '').partition(';')[0].strip()
+    if re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]*', media_type):
+        return media_type
+    return 'application/octet-stream'
 
 
 @router.get('/config', response_model=AgentAPIAdminConfigResponse)
@@ -331,6 +359,76 @@ async def get_agent_chat_status(
         return {'status': remote.get('status'), 'session_id': agent_meta['session_id']}
     except AgentAPIError as error:
         raise HTTPException(status_code=error.status_code, detail=str(error))
+
+
+@router.get('/chats/{chat_id}/files')
+async def get_agent_chat_files(
+    chat_id: str,
+    user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    chat = await Chats.get_chat_by_id_for_user(chat_id, user, db=db)
+    if not chat:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+    if chat.mode != 'agent':
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='This is not an Agent conversation')
+    agent_meta = _agent_meta(chat)
+    session_id = str(agent_meta['session_id'])
+    _, base_url, api_key, _ = await _config()
+    if not api_key:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail='AgentAPI is not configured')
+
+    try:
+        files = await list_session_files(base_url=base_url, api_key=api_key, session_id=session_id)
+        return [_public_file(file) for file in files if _file_belongs_to_session(file, session_id)]
+    except AgentAPIError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error))
+    except (aiohttp.ClientError, TimeoutError) as error:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f'Unable to reach AgentAPI: {error}')
+
+
+@router.get('/chats/{chat_id}/files/{file_id}/content')
+async def download_agent_chat_file(
+    chat_id: str,
+    file_id: str,
+    user=Depends(get_verified_user),
+    db: AsyncSession = Depends(get_async_session),
+):
+    chat = await Chats.get_chat_by_id_for_user(chat_id, user, db=db)
+    if not chat:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+    if chat.mode != 'agent':
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail='This is not an Agent conversation')
+    agent_meta = _agent_meta(chat)
+    session_id = str(agent_meta['session_id'])
+    _, base_url, api_key, _ = await _config()
+    if not api_key:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail='AgentAPI is not configured')
+
+    try:
+        file = await get_file(base_url=base_url, api_key=api_key, file_id=file_id)
+    except AgentAPIError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error))
+    except (aiohttp.ClientError, TimeoutError) as error:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f'Unable to reach AgentAPI: {error}')
+
+    if not _file_belongs_to_session(file, session_id):
+        # Do not reveal whether a caller-supplied id exists in another Session.
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=ERROR_MESSAGES.NOT_FOUND)
+    if file.get('downloadable') is False:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='This file is not downloadable')
+
+    filename = str(file.get('filename') or 'download')
+    headers = {'Content-Disposition': f"attachment; filename*=UTF-8''{quote(filename, safe='')}"}
+    size_bytes = file.get('size_bytes')
+    if isinstance(size_bytes, int) and size_bytes >= 0:
+        headers['Content-Length'] = str(size_bytes)
+
+    return StreamingResponse(
+        stream_file_content(base_url=base_url, api_key=api_key, file_id=file_id),
+        media_type=_safe_media_type(file.get('mime_type')),
+        headers=headers,
+    )
 
 
 @router.post('/chats/{chat_id}/interrupt')

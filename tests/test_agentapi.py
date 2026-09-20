@@ -9,6 +9,7 @@ from open_webui.utils.agentapi import (
     _iter_sse,
     create_session,
     event_text,
+    list_session_files,
     start_agent_turn,
     stream_turn_events,
 )
@@ -87,7 +88,41 @@ class FakeSession:
         return FakeResponse(data={'data': []})
 
 
+class FakeFileSession(FakeSession):
+    def get(self, url, **kwargs):
+        self.get_calls.append((url, kwargs))
+        self.calls.append(('get', url))
+        if not url.endswith('/v1/files'):
+            raise AssertionError(f'Unexpected GET request: {url}')
+        page = kwargs.get('params', {}).get('page')
+        if page is None:
+            return FakeResponse(data={'data': [{'id': 'file-1'}], 'next_page': 'cursor-1'})
+        if page == 'cursor-1':
+            return FakeResponse(data={'data': [{'id': 'file-2'}], 'next_page': None})
+        raise AssertionError(f'Unexpected page: {page}')
+
+
 class AgentAPIClientTests(unittest.IsolatedAsyncioTestCase):
+    async def test_list_session_files_follows_cursors_with_session_scope(self):
+        fake_session = FakeFileSession()
+        with patch('open_webui.utils.agentapi.aiohttp.ClientSession', return_value=fake_session):
+            files = await list_session_files(
+                base_url='https://agent.qiniuapi.com',
+                api_key='secret',
+                session_id='session-1',
+            )
+
+        self.assertEqual(files, [{'id': 'file-1'}, {'id': 'file-2'}])
+        self.assertEqual(len(fake_session.get_calls), 2)
+        self.assertEqual(
+            fake_session.get_calls[0][1]['params'],
+            {'scope_id': 'session-1', 'limit': 1000},
+        )
+        self.assertEqual(
+            fake_session.get_calls[1][1]['params'],
+            {'scope_id': 'session-1', 'limit': 1000, 'page': 'cursor-1'},
+        )
+
     async def test_turn_keeps_running_after_response_stream_disconnects(self):
         channel = AgentTurnChannel()
         resume = asyncio.Event()
