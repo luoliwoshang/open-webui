@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -9,6 +10,9 @@ from uuid import uuid4
 import aiohttp
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from open_webui.constants import ERROR_MESSAGES
 from open_webui.events import EVENTS, publish_event
 from open_webui.internal.db import get_async_session
@@ -18,17 +22,17 @@ from open_webui.models.config import Config
 from open_webui.utils.access_control import has_access, has_permission
 from open_webui.utils.agentapi import (
     AgentAPIError,
+    AgentTurnChannel,
     create_session,
     delete_session,
     event_text,
     get_session,
     send_events,
+    start_agent_turn,
     stream_turn_events,
     verify_connection,
 )
 from open_webui.utils.auth import get_admin_user, get_verified_user
-from pydantic import BaseModel, Field, field_validator
-from sqlalchemy.ext.asyncio import AsyncSession
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -378,7 +382,9 @@ async def send_agent_message(
     parent_id = chat.current_message_id
     now = int(time.time())
 
-    async def generate():
+    channel = AgentTurnChannel()
+
+    async def run_turn() -> None:
         user_message = {
             'id': user_message_id,
             'role': 'user',
@@ -399,20 +405,22 @@ async def send_agent_message(
             'done': False,
             'meta': {'agentapi': {'events': []}},
         }
-        await Chats.upsert_message_to_chat_by_id_and_message_id(chat_id, user_message_id, user_message)
-        await Chats.upsert_message_to_chat_by_id_and_message_id(chat_id, assistant_message_id, assistant_message)
-        yield _ndjson(
-            {
-                'type': 'message.accepted',
-                'user_message_id': user_message_id,
-                'message_id': assistant_message_id,
-            }
-        )
-
         content = ''
         event_summaries: list[dict[str, Any]] = []
         final_status = 'idle'
         try:
+            await Chats.upsert_message_to_chat_by_id_and_message_id(chat_id, user_message_id, user_message)
+            await Chats.upsert_message_to_chat_by_id_and_message_id(chat_id, assistant_message_id, assistant_message)
+            channel.publish(
+                _ndjson(
+                    {
+                        'type': 'message.accepted',
+                        'user_message_id': user_message_id,
+                        'message_id': assistant_message_id,
+                    }
+                )
+            )
+
             async for event in stream_turn_events(
                 base_url=base_url,
                 api_key=api_key,
@@ -427,7 +435,7 @@ async def send_agent_message(
                     event_summaries.append(_event_summary(event))
                 if event_type.startswith('session.status_'):
                     final_status = event_type.removeprefix('session.status_')
-                yield _ndjson({'type': 'agent.event', 'event': event, 'content': content})
+                channel.publish(_ndjson({'type': 'agent.event', 'event': event, 'content': content}))
 
             assistant_message.update(
                 {
@@ -442,7 +450,7 @@ async def send_agent_message(
                 'agentapi': {**agent_meta, 'status': final_status},
             }
             await Chats.update_chat_meta_by_id(chat_id, updated_meta)
-            yield _ndjson({'type': 'done', 'message_id': assistant_message_id, 'content': content})
+            channel.publish(_ndjson({'type': 'done', 'message_id': assistant_message_id, 'content': content}))
         except (AgentAPIError, aiohttp.ClientError, TimeoutError) as error:
             log.warning('AgentAPI turn failed for chat %s: %s', chat_id, error)
             assistant_message.update(
@@ -454,10 +462,29 @@ async def send_agent_message(
                 }
             )
             await Chats.upsert_message_to_chat_by_id_and_message_id(chat_id, assistant_message_id, assistant_message)
-            yield _ndjson({'type': 'error', 'message_id': assistant_message_id, 'detail': str(error)})
+            channel.publish(_ndjson({'type': 'error', 'message_id': assistant_message_id, 'detail': str(error)}))
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception('Unexpected AgentAPI turn failure for chat %s', chat_id)
+            detail = 'Agent turn failed unexpectedly'
+            assistant_message.update(
+                {
+                    'content': content,
+                    'done': True,
+                    'error': {'content': detail},
+                    'meta': {'agentapi': {'events': event_summaries[-100:]}},
+                }
+            )
+            await Chats.upsert_message_to_chat_by_id_and_message_id(chat_id, assistant_message_id, assistant_message)
+            channel.publish(_ndjson({'type': 'error', 'message_id': assistant_message_id, 'detail': detail}))
+        finally:
+            channel.close()
+
+    start_agent_turn(run_turn())
 
     return StreamingResponse(
-        generate(),
+        channel.stream(),
         media_type='application/x-ndjson',
         headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'},
     )

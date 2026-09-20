@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import unittest
 from unittest.mock import patch
 
-from open_webui.utils.agentapi import _iter_sse, create_session, event_text, stream_turn_events
+from open_webui.utils.agentapi import (
+    AgentTurnChannel,
+    _iter_sse,
+    create_session,
+    event_text,
+    start_agent_turn,
+    stream_turn_events,
+)
 
 
 class FakeContent:
@@ -80,6 +88,29 @@ class FakeSession:
 
 
 class AgentAPIClientTests(unittest.IsolatedAsyncioTestCase):
+    async def test_turn_keeps_running_after_response_stream_disconnects(self):
+        channel = AgentTurnChannel()
+        resume = asyncio.Event()
+        persisted = asyncio.Event()
+
+        async def run_turn():
+            channel.publish(b'{"type":"message.accepted"}\n')
+            await resume.wait()
+            persisted.set()
+            channel.close()
+
+        task = start_agent_turn(run_turn())
+        stream = channel.stream()
+        first = await anext(stream)
+        self.assertIn(b'message.accepted', first)
+
+        await stream.aclose()
+        resume.set()
+        await task
+
+        self.assertTrue(persisted.is_set())
+        self.assertFalse(task.cancelled())
+
     async def test_create_session_uses_native_agent_reference(self):
         fake_session = FakeSession()
         with patch('open_webui.utils.agentapi.aiohttp.ClientSession', return_value=fake_session):

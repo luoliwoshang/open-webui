@@ -112,7 +112,9 @@
 				chat = await createAgentChat(localStorage.token, selectedProfileId, content.slice(0, 80));
 				chatId.set(chat.id);
 				chatTitle.set(chat.title);
-				await goto(`/a/${chat.id}`, { replaceState: true, noScroll: true, keepFocus: true });
+				// Keep this component (and its response stream) alive while giving the
+				// newly created conversation its permanent URL.
+				window.history.replaceState(history.state, '', `/a/${chat.id}`);
 				await refreshChatList(localStorage.token, { refreshPinned: true });
 			}
 

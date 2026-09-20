@@ -4,12 +4,70 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Coroutine
 from typing import Any
 from urllib.parse import quote
 
 import aiohttp
+
+log = logging.getLogger(__name__)
+
+_STREAM_END = object()
+_agent_turn_tasks: set[asyncio.Task[None]] = set()
+
+
+class AgentTurnChannel:
+    """Best-effort event delivery that never owns the AgentAPI turn lifecycle."""
+
+    def __init__(self) -> None:
+        self._queue: asyncio.Queue[bytes | object] = asyncio.Queue()
+        self._attached = True
+
+    def publish(self, data: bytes) -> None:
+        if self._attached:
+            self._queue.put_nowait(data)
+
+    def close(self) -> None:
+        if self._attached:
+            self._queue.put_nowait(_STREAM_END)
+
+    async def stream(self) -> AsyncIterator[bytes]:
+        try:
+            while True:
+                item = await self._queue.get()
+                if item is _STREAM_END:
+                    return
+                if isinstance(item, bytes):
+                    yield item
+        finally:
+            # StreamingResponse cancels this iterator when the browser leaves.
+            # Detach only the delivery channel; the independently held worker
+            # must continue polling AgentAPI and persist the completed turn.
+            self._attached = False
+            while not self._queue.empty():
+                self._queue.get_nowait()
+
+
+def _agent_turn_done(task: asyncio.Task[None]) -> None:
+    _agent_turn_tasks.discard(task)
+    if task.cancelled():
+        return
+    error = task.exception()
+    if error:
+        log.error(
+            'Uncaught error in background AgentAPI turn',
+            exc_info=(type(error), error, error.__traceback__),
+        )
+
+
+def start_agent_turn(coroutine: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
+    """Keep a strong reference so a disconnected response cannot stop the turn."""
+    task = asyncio.create_task(coroutine)
+    _agent_turn_tasks.add(task)
+    task.add_done_callback(_agent_turn_done)
+    return task
 
 
 class AgentAPIError(RuntimeError):
