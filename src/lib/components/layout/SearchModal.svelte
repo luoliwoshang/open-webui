@@ -738,10 +738,10 @@
 							{:else}
 								<a
 									class="flex-1 min-w-0"
-									href="/c/{chat.id}"
+									href={chat.mode === 'agent' ? `/a/${chat.id}` : `/c/${chat.id}`}
 									draggable="false"
 									on:click={async () => {
-										await goto(`/c/${chat.id}`);
+										await goto(chat.mode === 'agent' ? `/a/${chat.id}` : `/c/${chat.id}`);
 										show = false;
 										onClose();
 									}}
@@ -816,6 +816,8 @@
 										<div class="flex items-center">
 											<ChatMenu
 												chatId={chat.id}
+												allowClone={chat.mode !== 'agent'}
+												allowShare={chat.mode !== 'agent'}
 												shareHandler={() => {
 													menuChatId = chat.id;
 													showShareChatModal = true;

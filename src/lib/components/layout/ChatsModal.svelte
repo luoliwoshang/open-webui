@@ -458,7 +458,7 @@
 														'border-b'} border-gray-50 dark:border-gray-850/30 text-xs"
 												>
 													<td class="px-3 py-1 w-2/3">
-														<a href="/c/{chat.id}" target="_blank">
+												<a href={chat.mode === 'agent' ? `/a/${chat.id}` : `/c/${chat.id}`} target="_blank">
 															<div class=" hover:underline line-clamp-1">
 																{chat.title}
 															</div>

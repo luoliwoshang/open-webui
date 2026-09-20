@@ -25,6 +25,8 @@
 	<Lock {className} {strokeWidth} />
 {:else if id === 'connections'}
 	<Link {className} {strokeWidth} />
+{:else if id === 'agentapi'}
+	<UserCircle {className} {strokeWidth} />
 {:else if id === 'models'}
 	<svg
 		aria-hidden="true"

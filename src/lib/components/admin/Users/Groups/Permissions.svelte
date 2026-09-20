@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { getContext, onMount } from 'svelte';
-	const i18n = getContext('i18n');
+	const i18n: any = getContext('i18n');
 
 	import Switch from '$lib/components/common/Switch.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
@@ -8,8 +8,8 @@
 	import { DEFAULT_PERMISSIONS } from '$lib/constants/permissions';
 	import { config } from '$lib/stores';
 
-	export let permissions = {};
-	export let defaultPermissions = {};
+	export let permissions: any = {};
+	export let defaultPermissions: any = {};
 
 	// Reactive statement to ensure all fields are present in `permissions`
 	$: {
@@ -958,6 +958,22 @@
 
 	<div>
 		<div class=" mb-2 text-sm font-normal">{$i18n.t('Features Permissions')}</div>
+
+		<div class="flex flex-col w-full">
+			<div class="flex w-full justify-between my-1">
+				<div class=" self-center text-xs font-normal">
+					{$i18n.t('Agent Mode')}
+				</div>
+				<Switch bind:state={permissions.features.agent_mode} ariaLabel={$i18n.t('Agent Mode')} />
+			</div>
+			{#if defaultPermissions?.features?.agent_mode && !permissions.features.agent_mode}
+				<div>
+					<div class="text-xs text-gray-500">
+						{$i18n.t('This is a default user permission and will remain enabled.')}
+					</div>
+				</div>
+			{/if}
+		</div>
 
 		<div class="flex flex-col w-full">
 			<div class="flex w-full justify-between my-1">

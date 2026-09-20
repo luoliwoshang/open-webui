@@ -41,6 +41,7 @@
 	import AdminGeneral from '$lib/components/admin/Settings/General.svelte';
 	import AdminAuthentication from '$lib/components/admin/Settings/Authentication.svelte';
 	import AdminConnections from '$lib/components/admin/Settings/Connections.svelte';
+	import AdminAgentAPI from '$lib/components/admin/Settings/AgentAPI.svelte';
 	import AdminModels from '$lib/components/admin/Settings/Models.svelte';
 	import AdminSubagents from '$lib/components/admin/Settings/Subagents.svelte';
 	import AdminEvaluations from '$lib/components/admin/Settings/Evaluations.svelte';
@@ -153,6 +154,7 @@
 		'admin:general': 'System',
 		'admin:authentication': 'System',
 		'admin:connections': 'AI',
+		'admin:agentapi': 'AI',
 		'admin:models': 'AI',
 		'admin:subagents': 'AI',
 		'admin:evaluations': 'Quality',
@@ -709,6 +711,11 @@
 				'direct connections',
 				'proxy'
 			]
+		},
+		{
+			id: 'admin:agentapi',
+			title: 'AgentAPI',
+			keywords: ['agent', 'agentapi', 'qiniu', '七牛', 'environment', 'session']
 		},
 		{
 			id: 'admin:models',
@@ -1273,6 +1280,8 @@
 						toast.success($i18n.t('Settings saved successfully!'));
 					}}
 				/>
+			{:else if selectedTab === 'admin:agentapi'}
+				<AdminAgentAPI />
 			{:else if selectedTab === 'admin:models'}
 				<AdminModels bind:tabState />
 			{:else if selectedTab === 'admin:subagents'}

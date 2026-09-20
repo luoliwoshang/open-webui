@@ -61,6 +61,7 @@ export const DEFAULT_PERMISSIONS = {
 	},
 	features: {
 		api_keys: false,
+		agent_mode: false,
 		notes: true,
 		channels: true,
 		folders: true,

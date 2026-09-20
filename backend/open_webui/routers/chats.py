@@ -36,6 +36,7 @@ from open_webui.socket.main import get_event_emitter
 from open_webui.tasks import get_response_streams_by_chat_id, has_active_tasks, stop_item_tasks
 from open_webui.utils.access_control import filter_allowed_access_grants, has_permission
 from open_webui.utils.access_control.folders import has_folder_write_access
+from open_webui.utils.agentapi import delete_session as delete_agentapi_session
 from open_webui.utils.auth import bearer_security, get_admin_user, get_current_user, get_verified_user
 from open_webui.utils.chat_fork import build_fork_history
 from open_webui.utils.context_compaction import compact_chat_branch, get_chat_context_usage
@@ -886,6 +887,7 @@ async def search_user_chats(
                 title=chat.title,
                 updated_at=chat.updated_at,
                 created_at=chat.created_at,
+                mode=chat.mode,
                 last_read_at=chat.last_read_at,
                 snippet=chat_search_snippet(chat.chat, search_text),
             )
@@ -1589,6 +1591,22 @@ async def delete_chat_by_id(
             detail=ERROR_MESSAGES.NOT_FOUND,
         )
 
+    if chat.mode == 'agent':
+        agent_meta = (chat.meta or {}).get('agentapi') or {}
+        session_id = agent_meta.get('session_id')
+        if session_id:
+            try:
+                agent_config = await Config.get_many('agentapi.base_url', 'agentapi.api_key')
+                if agent_config.get('agentapi.api_key'):
+                    await delete_agentapi_session(
+                        base_url=agent_config.get('agentapi.base_url') or 'https://agent.qiniuapi.com',
+                        api_key=agent_config['agentapi.api_key'],
+                        session_id=session_id,
+                    )
+            except Exception:
+                # The local record must remain manageable if the upstream is unavailable.
+                log.exception('Failed to delete AgentAPI session %s for chat %s', session_id, id)
+
     # Cancel any in-flight LLM tasks (streaming, title/tags generation) before
     # deleting the chat to prevent orphaned requests.
     await stop_item_tasks(request.app.state.redis, id)
@@ -1681,6 +1699,11 @@ async def fork_chat_by_id(
     chat = await Chats.get_chat_by_id_and_user_id(id, user.id, db=db)
     if not chat:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=ERROR_MESSAGES.DEFAULT())
+    if chat.mode == 'agent':
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail='Agent conversations cannot be forked.',
+        )
 
     if await has_active_tasks(request.app.state.redis, id):
         raise HTTPException(
@@ -1771,6 +1794,11 @@ async def clone_chat_by_id(
 
     chat = await Chats.get_chat_by_id_and_user_id(id, user.id, db=db)
     if chat:
+        if chat.mode == 'agent':
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail='Agent conversations cannot be cloned.',
+            )
         updated_chat = {
             **chat.chat,
             'originalChatId': chat.id,
@@ -1942,6 +1970,11 @@ async def share_chat_by_id(
     chat = await Chats.get_chat_by_id_and_user_id(id, user.id, db=db)
     if not chat:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail=ERROR_MESSAGES.ACCESS_PROHIBITED)
+    if chat.mode == 'agent':
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail='Agent conversations cannot be shared.',
+        )
 
     # If a share already exists, re-snapshot it
     if chat.share_id:

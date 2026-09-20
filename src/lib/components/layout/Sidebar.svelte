@@ -37,9 +37,12 @@
 	} from '$lib/stores/chatList';
 	import { onMount, getContext, tick, onDestroy } from 'svelte';
 
-	const i18n = getContext('i18n');
+	const i18n: any = getContext('i18n');
 
 	$: canImportChats = $user?.role === 'admin' || ($user?.permissions?.chat?.import ?? true);
+	$: canUseAgentMode =
+		$config?.features?.enable_agent_mode &&
+		($user?.role === 'admin' || ($user?.permissions?.features?.agent_mode ?? false));
 
 	import {
 		getAllTags,
@@ -91,6 +94,7 @@
 	import DropdownMenu from '../common/DropdownMenu.svelte';
 	import CheckIcon from '../icons/Check.svelte';
 	import MoreHorizontalIcon from './Sidebar/icons/MoreHorizontal.svelte';
+	import SparklesIcon from '$lib/components/icons/Sparkles.svelte';
 	import MobileSwipePanel from '../common/MobileSwipePanel.svelte';
 
 	const BREAKPOINT = 768;
@@ -101,7 +105,7 @@
 	let navElement;
 	let shiftKey = false;
 
-	let selectedChatId = null;
+	let selectedChatId: string | null = null;
 
 	// Keep the optimistic sidebar highlight in sync with the active chat. Leaving the
 	// chat view (e.g. navigating to an admin page) clears chatId, and programmatic
@@ -126,6 +130,7 @@
 	let showFolders = false;
 	let showSharedFolders = false;
 	let showChatsMenu = false;
+	let showAgents = true;
 
 	let folders = {};
 	type SelectedSidebarFolder = { id: string } | null;
@@ -1003,6 +1008,28 @@
 						</Tooltip>
 					</div>
 
+					{#if canUseAgentMode}
+						<div>
+							<Tooltip content={$i18n.t('New Agent')} placement="right">
+								<a
+									class="cursor-pointer flex size-8 items-center justify-center transition group"
+									href="/agent"
+									draggable="false"
+									on:click={(event) => {
+										event.stopImmediatePropagation();
+									}}
+									aria-label={$i18n.t('New Agent')}
+								>
+									<div
+										class="self-center flex size-[calc(30px*var(--app-text-scale,1))] items-center justify-center rounded-lg transition group-hover:bg-violet-50 dark:group-hover:bg-violet-950/40"
+									>
+										<SparklesIcon className="size-4" strokeWidth="1.5" />
+									</div>
+								</a>
+							</Tooltip>
+						</div>
+					{/if}
+
 					<div>
 						<Tooltip content={$i18n.t('Search')} placement="right">
 							<button
@@ -1229,6 +1256,26 @@
 							</a>
 						</div>
 
+						{#if canUseAgentMode}
+							<div class="px-1 flex justify-center text-violet-700 dark:text-violet-300">
+								<a
+									id="sidebar-new-agent-button"
+									class="group grow flex items-center space-x-2 rounded-xl px-2 py-1.5 hover:bg-violet-50 dark:hover:bg-violet-950/40 transition outline-none"
+									href="/agent"
+									draggable="false"
+									on:click={closeMobileSidebar}
+									aria-label={$i18n.t('New Agent')}
+								>
+									<div class="self-center flex size-4 shrink-0 items-center justify-center">
+										<SparklesIcon className="size-4" strokeWidth="1.5" />
+									</div>
+									<div class="flex flex-1 self-center translate-y-[0.5px]">
+										<div class="self-center text-[0.8125rem] leading-5">{$i18n.t('New Agent')}</div>
+									</div>
+								</a>
+							</div>
+						{/if}
+
 						<div class="px-1 flex justify-center text-gray-700 dark:text-gray-300">
 							<button
 								id="sidebar-search-button"
@@ -1412,6 +1459,37 @@
 						</SidebarSection>
 					{/if}
 
+					{#if $chats?.some((chat) => chat.mode === 'agent') ?? false}
+						<SidebarSection
+							id="sidebar-agents"
+							bind:open={showAgents}
+							name={$i18n.t('Agents')}
+							dragAndDrop={false}
+							onAdd={canUseAgentMode ? () => goto('/agent') : null}
+							onAddLabel={$i18n.t('New Agent')}
+						>
+							<div class="flex flex-col">
+								{#each $chats?.filter((chat) => chat.mode === 'agent') ?? [] as chat (chat.id)}
+									<ChatItem
+										id={chat.id}
+										title={chat.title}
+										mode="agent"
+										createdAt={chat.created_at}
+										updatedAt={chat.updated_at}
+										lastReadAt={chat.last_read_at}
+										active={chat.active ?? false}
+										{shiftKey}
+										selected={selectedChatId === chat.id}
+										on:select={() => (selectedChatId = chat.id)}
+										on:unselect={() => (selectedChatId = null)}
+										on:change={initChatList}
+										onReadStateChange={applyChatReadState}
+									/>
+								{/each}
+							</div>
+						</SidebarSection>
+					{/if}
+
 					<SidebarSection
 						id="sidebar-chats"
 						name={$i18n.t('Chats')}
@@ -1587,6 +1665,7 @@
 													updatedAt={chat.updated_at}
 													lastReadAt={chat.last_read_at}
 													active={chat.active ?? false}
+													mode={chat.mode ?? 'chat'}
 													{shiftKey}
 													selected={selectedChatId === chat.id}
 													on:select={() => {
@@ -1614,8 +1693,9 @@
 						<div class=" flex-1 flex flex-col overflow-y-auto scrollbar-hidden">
 							<div class="pt-1.5">
 								{#if $chats}
-									{#each $chats as chat, idx (`chat-${chat?.id ?? idx}`)}
-										{#if idx === 0 || (idx > 0 && chat.time_range !== $chats[idx - 1].time_range)}
+									{@const regularChats = $chats.filter((chat) => chat.mode !== 'agent')}
+									{#each regularChats as chat, idx (`chat-${chat?.id ?? idx}`)}
+										{#if idx === 0 || (idx > 0 && chat.time_range !== regularChats[idx - 1].time_range)}
 											<div
 												class="w-full pl-2.5 text-xs text-gray-500 dark:text-gray-500 font-normal {idx ===
 												0
@@ -1652,6 +1732,7 @@
 											updatedAt={chat.updated_at}
 											lastReadAt={chat.last_read_at}
 											active={chat.active ?? false}
+											mode={chat.mode ?? 'chat'}
 											{shiftKey}
 											selected={selectedChatId === chat.id}
 											on:select={() => {

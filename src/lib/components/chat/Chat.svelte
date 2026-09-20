@@ -2265,6 +2265,10 @@
 		});
 
 		if (chat) {
+			if (chat.mode === 'agent' && !embedded) {
+				await goto(`/a/${chat.id}`, { replaceState: true });
+				return;
+			}
 			tags = await getTagsById(localStorage.token, $chatId).catch(async (error) => {
 				console.warn('[note-chat] getTagsById failed; continuing without tags', {
 					chatIdProp,
