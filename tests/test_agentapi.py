@@ -41,6 +41,7 @@ class FakeSession:
     def __init__(self):
         self.get_calls = []
         self.post_calls = []
+        self.calls = []
 
     async def __aenter__(self):
         return self
@@ -50,12 +51,13 @@ class FakeSession:
 
     def get(self, url, **kwargs):
         self.get_calls.append((url, kwargs))
+        self.calls.append(('get', url))
         if url.endswith('/events'):
             return FakeResponse(data={'data': [{'id': 'event-before-turn'}]})
         return FakeResponse(
             chunks=[
                 b'data: {"type":"agent.message","content":[{"type":"text","text":"old"}]}\n\n',
-                b'data: {"type":"session.status_idle"}\n\n',
+                b'id: event-before-turn\ndata: {"type":"session.status_idle"}\n\n',
                 b'data: {"type":"session.status_running"}\n\n',
                 b'data: {"type":"agent.message","message":{"content":[',
                 b'{"type":"text","text":"hello"}]}}\n\n',
@@ -65,6 +67,7 @@ class FakeSession:
 
     def post(self, url, **kwargs):
         self.post_calls.append((url, kwargs))
+        self.calls.append(('post', url))
         if url.endswith('/v1/sessions'):
             return FakeResponse(data={'id': 'session-1', 'status': 'idle'})
         return FakeResponse(data={'data': []})
@@ -90,7 +93,7 @@ class AgentAPIClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request['json']['agent'], {'type': 'agent', 'id': 'agent-1', 'version': 3})
         self.assertEqual(request['json']['environment_id'], 'env-1')
 
-    async def test_turn_starts_after_latest_event_and_stops_on_idle(self):
+    async def test_turn_posts_before_stream_and_skips_replayed_history(self):
         fake_session = FakeSession()
         with patch('open_webui.utils.agentapi.aiohttp.ClientSession', return_value=fake_session):
             events = [
@@ -107,8 +110,12 @@ class AgentAPIClientTests(unittest.IsolatedAsyncioTestCase):
             [event['type'] for event in events],
             ['session.status_running', 'agent.message', 'session.status_idle'],
         )
+        self.assertEqual(
+            [method for method, _ in fake_session.calls],
+            ['get', 'post', 'get'],
+        )
         _, stream_request = fake_session.get_calls[1]
-        self.assertEqual(stream_request['headers']['Last-Event-ID'], 'event-before-turn')
+        self.assertNotIn('Last-Event-ID', stream_request['headers'])
         _, send_request = fake_session.post_calls[0]
         self.assertEqual(
             send_request['json'],

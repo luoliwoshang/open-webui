@@ -146,7 +146,7 @@ async def _iter_sse(response: aiohttp.ClientResponse) -> AsyncIterator[dict[str,
 async def stream_turn_events(
     *, base_url: str, api_key: str, session_id: str, text: str
 ) -> AsyncIterator[dict[str, Any]]:
-    """Open the event stream, submit a user turn, then stop on its terminal state."""
+    """Submit a user turn, replay from the previous boundary, and stop at its terminal state."""
     session_path = quote(session_id, safe='')
     headers = _headers(api_key)
     timeout = aiohttp.ClientTimeout(total=None, connect=15, sock_read=900)
@@ -164,33 +164,42 @@ async def stream_turn_events(
             latest = ((history or {}).get('data') or [None])[0]
             latest_id = latest.get('id') if isinstance(latest, dict) else None
 
-        stream_headers = {**headers, 'accept': 'text/event-stream'}
-        if latest_id:
-            stream_headers['Last-Event-ID'] = str(latest_id)
+        # The public AgentAPI edge may buffer an idle SSE response until the
+        # first event arrives. Posting only after aiohttp has entered the stream
+        # context can therefore deadlock on a brand-new Session. Events are
+        # durable and the stream replays them, so submit first and use the last
+        # pre-turn event as a local replay boundary.
+        async with session.post(
+            _url(base_url, f'/v1/sessions/{session_path}/events'),
+            headers=headers,
+            json={
+                'events': [
+                    {
+                        'type': 'user.message',
+                        'input': {'parts': [{'type': 'text', 'text': text}]},
+                    }
+                ]
+            },
+        ) as send_response:
+            await _raise_for_status(send_response)
+            await send_response.read()
 
+        stream_headers = {**headers, 'accept': 'text/event-stream'}
         async with session.get(
             _url(base_url, f'/v1/sessions/{session_path}/events/stream'),
             headers=stream_headers,
         ) as stream_response:
             await _raise_for_status(stream_response)
 
-            async with session.post(
-                _url(base_url, f'/v1/sessions/{session_path}/events'),
-                headers=headers,
-                json={
-                    'events': [
-                        {
-                            'type': 'user.message',
-                            'input': {'parts': [{'type': 'text', 'text': text}]},
-                        }
-                    ]
-                },
-            ) as send_response:
-                await _raise_for_status(send_response)
-                await send_response.read()
-
             saw_running = False
+            crossed_replay_boundary = latest_id is None
             async for event in _iter_sse(stream_response):
+                if not crossed_replay_boundary:
+                    event_id = event.get('id') or event.get('_sse_id')
+                    if str(event_id or '') == str(latest_id):
+                        crossed_replay_boundary = True
+                    continue
+
                 event_type = str(event.get('type') or '')
                 if event_type in {'session.status_running', 'session.status_rescheduling'}:
                     saw_running = True
