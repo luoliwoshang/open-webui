@@ -68,6 +68,8 @@ export type AgentStreamEvent = {
 	detail?: string;
 	event?: AgentAPIEvent;
 	message_id?: string;
+	parent_message_id?: string;
+	new_message?: boolean;
 	user_message_id?: string;
 };
 

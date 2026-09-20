@@ -216,8 +216,33 @@
 				chat.id,
 				content,
 				(event) => {
-					const index = messages.findIndex((message) => message.id === responseMessageId);
+					const targetMessageId = event.message_id ?? responseMessageId;
+					let index = messages.findIndex((message) => message.id === targetMessageId);
 					if (event.type === 'agent.event') {
+						const type = typeof event.event?.type === 'string' ? event.event.type : '';
+						if (type === 'agent.message' && index === -1) {
+							const parentMessageId = event.parent_message_id ?? messages.at(-1)?.id;
+							const parentIndex = messages.findIndex((message) => message.id === parentMessageId);
+							if (parentIndex !== -1) {
+								messages[parentIndex] = {
+									...messages[parentIndex],
+									done: true,
+									childrenIds: [targetMessageId]
+								};
+							}
+							messages = [
+								...messages,
+								{
+									id: targetMessageId,
+									role: 'assistant',
+									content: event.content ?? '',
+									done: false,
+									parentId: parentMessageId,
+									childrenIds: []
+								}
+							];
+							index = messages.length - 1;
+						}
 						if (index !== -1) {
 							messages[index] = {
 								...messages[index],
@@ -225,7 +250,6 @@
 							};
 							messages = [...messages];
 						}
-						const type = typeof event.event?.type === 'string' ? event.event.type : '';
 						if (
 							type.startsWith('agent.tool') ||
 							type.startsWith('agent.mcp_tool') ||

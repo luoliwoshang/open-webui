@@ -492,7 +492,8 @@ async def send_agent_message(
             'timestamp': now,
             'done': True,
         }
-        assistant_message = {
+        current_assistant_message_id = assistant_message_id
+        current_assistant_message = {
             'id': assistant_message_id,
             'role': 'assistant',
             'model': f'agentapi:{agent_meta.get("profile_id")}',
@@ -503,12 +504,14 @@ async def send_agent_message(
             'done': False,
             'meta': {'agentapi': {'events': []}},
         }
-        content = ''
+        agent_message_count = 0
         event_summaries: list[dict[str, Any]] = []
         final_status = 'idle'
         try:
             await Chats.upsert_message_to_chat_by_id_and_message_id(chat_id, user_message_id, user_message)
-            await Chats.upsert_message_to_chat_by_id_and_message_id(chat_id, assistant_message_id, assistant_message)
+            await Chats.upsert_message_to_chat_by_id_and_message_id(
+                chat_id, current_assistant_message_id, current_assistant_message
+            )
             channel.publish(
                 _ndjson(
                     {
@@ -525,57 +528,154 @@ async def send_agent_message(
                 session_id=str(agent_meta['session_id']),
                 text=form_data.content,
             ):
-                text = event_text(event)
-                if text:
-                    content += text
                 event_type = str(event.get('type') or 'event')
                 if event_type.startswith(('agent.tool', 'agent.mcp_tool', 'session.', 'error')):
                     event_summaries.append(_event_summary(event))
                 if event_type.startswith('session.status_'):
                     final_status = event_type.removeprefix('session.status_')
-                channel.publish(_ndjson({'type': 'agent.event', 'event': event, 'content': content}))
 
-            assistant_message.update(
+                is_new_message = event_type == 'agent.message' and agent_message_count > 0
+                if event_type == 'agent.message':
+                    text = event_text(event)
+                    if is_new_message:
+                        next_message_id = str(uuid4())
+                        current_assistant_message.update(
+                            {
+                                'done': True,
+                                'childrenIds': [next_message_id],
+                                'meta': {
+                                    'agentapi': {
+                                        **current_assistant_message['meta']['agentapi'],
+                                        'events': event_summaries[-100:],
+                                    }
+                                },
+                            }
+                        )
+                        await Chats.upsert_message_to_chat_by_id_and_message_id(
+                            chat_id, current_assistant_message_id, current_assistant_message
+                        )
+                        parent_message_id = current_assistant_message_id
+                        current_assistant_message_id = next_message_id
+                        current_assistant_message = {
+                            'id': current_assistant_message_id,
+                            'role': 'assistant',
+                            'model': f'agentapi:{agent_meta.get("profile_id")}',
+                            'content': text,
+                            'parentId': parent_message_id,
+                            'childrenIds': [],
+                            'timestamp': int(time.time()),
+                            'done': False,
+                            'meta': {
+                                'agentapi': {
+                                    'event_id': event.get('id'),
+                                    'events': event_summaries[-100:],
+                                }
+                            },
+                        }
+                    else:
+                        current_assistant_message.update(
+                            {
+                                'content': text,
+                                'meta': {
+                                    'agentapi': {
+                                        'event_id': event.get('id'),
+                                        'events': event_summaries[-100:],
+                                    }
+                                },
+                            }
+                        )
+                    agent_message_count += 1
+                    await Chats.upsert_message_to_chat_by_id_and_message_id(
+                        chat_id, current_assistant_message_id, current_assistant_message
+                    )
+
+                channel.publish(
+                    _ndjson(
+                        {
+                            'type': 'agent.event',
+                            'event': event,
+                            'content': current_assistant_message.get('content') or '',
+                            'message_id': current_assistant_message_id,
+                            'parent_message_id': current_assistant_message.get('parentId'),
+                            'new_message': is_new_message,
+                        }
+                    )
+                )
+
+            current_agent_meta = current_assistant_message['meta']['agentapi']
+            current_assistant_message.update(
                 {
-                    'content': content,
                     'done': True,
-                    'meta': {'agentapi': {'events': event_summaries[-100:]}},
+                    'meta': {
+                        'agentapi': {
+                            **current_agent_meta,
+                            'events': event_summaries[-100:],
+                        }
+                    },
                 }
             )
-            await Chats.upsert_message_to_chat_by_id_and_message_id(chat_id, assistant_message_id, assistant_message)
+            await Chats.upsert_message_to_chat_by_id_and_message_id(
+                chat_id, current_assistant_message_id, current_assistant_message
+            )
             updated_meta = {
                 **(chat.meta or {}),
                 'agentapi': {**agent_meta, 'status': final_status},
             }
             await Chats.update_chat_meta_by_id(chat_id, updated_meta)
-            channel.publish(_ndjson({'type': 'done', 'message_id': assistant_message_id, 'content': content}))
+            channel.publish(
+                _ndjson(
+                    {
+                        'type': 'done',
+                        'message_id': current_assistant_message_id,
+                        'content': current_assistant_message.get('content') or '',
+                    }
+                )
+            )
         except (AgentAPIError, aiohttp.ClientError, TimeoutError) as error:
             log.warning('AgentAPI turn failed for chat %s: %s', chat_id, error)
-            assistant_message.update(
+            current_agent_meta = current_assistant_message['meta']['agentapi']
+            current_assistant_message.update(
                 {
-                    'content': content,
                     'done': True,
                     'error': {'content': str(error)},
-                    'meta': {'agentapi': {'events': event_summaries[-100:]}},
+                    'meta': {
+                        'agentapi': {
+                            **current_agent_meta,
+                            'events': event_summaries[-100:],
+                        }
+                    },
                 }
             )
-            await Chats.upsert_message_to_chat_by_id_and_message_id(chat_id, assistant_message_id, assistant_message)
-            channel.publish(_ndjson({'type': 'error', 'message_id': assistant_message_id, 'detail': str(error)}))
+            await Chats.upsert_message_to_chat_by_id_and_message_id(
+                chat_id, current_assistant_message_id, current_assistant_message
+            )
+            channel.publish(
+                _ndjson({'type': 'error', 'message_id': current_assistant_message_id, 'detail': str(error)})
+            )
         except asyncio.CancelledError:
             raise
         except Exception:
             log.exception('Unexpected AgentAPI turn failure for chat %s', chat_id)
             detail = 'Agent turn failed unexpectedly'
-            assistant_message.update(
+            current_agent_meta = current_assistant_message['meta']['agentapi']
+            current_assistant_message.update(
                 {
-                    'content': content,
                     'done': True,
                     'error': {'content': detail},
-                    'meta': {'agentapi': {'events': event_summaries[-100:]}},
+                    'meta': {
+                        'agentapi': {
+                            **current_agent_meta,
+                            'events': event_summaries[-100:],
+                        }
+                    },
                 }
             )
-            await Chats.upsert_message_to_chat_by_id_and_message_id(chat_id, assistant_message_id, assistant_message)
-            channel.publish(_ndjson({'type': 'error', 'message_id': assistant_message_id, 'detail': detail}))
+            await Chats.upsert_message_to_chat_by_id_and_message_id(
+                chat_id, current_assistant_message_id, current_assistant_message
+            )
+            channel.publish(
+                _ndjson({'type': 'error', 'message_id': current_assistant_message_id, 'detail': detail})
+            )
         finally:
             channel.close()
 
