@@ -53,17 +53,23 @@ class FakeSession:
         self.get_calls.append((url, kwargs))
         self.calls.append(('get', url))
         if url.endswith('/events'):
-            return FakeResponse(data={'data': [{'id': 'event-before-turn'}]})
-        return FakeResponse(
-            chunks=[
-                b'data: {"type":"agent.message","content":[{"type":"text","text":"old"}]}\n\n',
-                b'id: event-before-turn\ndata: {"type":"session.status_idle"}\n\n',
-                b'data: {"type":"session.status_running"}\n\n',
-                b'data: {"type":"agent.message","message":{"content":[',
-                b'{"type":"text","text":"hello"}]}}\n\n',
-                b'data: {"type":"session.status_idle"}\n\n',
-            ]
-        )
+            if kwargs.get('params', {}).get('order') == 'desc':
+                return FakeResponse(data={'data': [{'id': 'event-before-turn'}]})
+            return FakeResponse(
+                data={
+                    'data': [
+                        {'id': 'event-running', 'type': 'session.status_running'},
+                        {
+                            'id': 'event-message',
+                            'type': 'agent.message',
+                            'message': {'content': [{'type': 'text', 'text': 'hello'}]},
+                        },
+                        {'id': 'event-idle', 'type': 'session.status_idle'},
+                    ],
+                    'next_page': None,
+                }
+            )
+        raise AssertionError(f'Unexpected GET request: {url}')
 
     def post(self, url, **kwargs):
         self.post_calls.append((url, kwargs))
@@ -93,7 +99,7 @@ class AgentAPIClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(request['json']['agent'], {'type': 'agent', 'id': 'agent-1', 'version': 3})
         self.assertEqual(request['json']['environment_id'], 'env-1')
 
-    async def test_turn_posts_before_stream_and_skips_replayed_history(self):
+    async def test_turn_posts_then_polls_after_previous_event(self):
         fake_session = FakeSession()
         with patch('open_webui.utils.agentapi.aiohttp.ClientSession', return_value=fake_session):
             events = [
@@ -114,8 +120,11 @@ class AgentAPIClientTests(unittest.IsolatedAsyncioTestCase):
             [method for method, _ in fake_session.calls],
             ['get', 'post', 'get'],
         )
-        _, stream_request = fake_session.get_calls[1]
-        self.assertNotIn('Last-Event-ID', stream_request['headers'])
+        _, poll_request = fake_session.get_calls[1]
+        self.assertEqual(
+            poll_request['params'],
+            {'limit': 100, 'order': 'asc', 'page': 'event-before-turn'},
+        )
         _, send_request = fake_session.post_calls[0]
         self.assertEqual(
             send_request['json'],

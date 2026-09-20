@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 from urllib.parse import quote
@@ -146,7 +148,7 @@ async def _iter_sse(response: aiohttp.ClientResponse) -> AsyncIterator[dict[str,
 async def stream_turn_events(
     *, base_url: str, api_key: str, session_id: str, text: str
 ) -> AsyncIterator[dict[str, Any]]:
-    """Submit a user turn, replay from the previous boundary, and stop at its terminal state."""
+    """Submit a user turn and incrementally poll its durable events until completion."""
     session_path = quote(session_id, safe='')
     headers = _headers(api_key)
     timeout = aiohttp.ClientTimeout(total=None, connect=15, sock_read=900)
@@ -164,11 +166,10 @@ async def stream_turn_events(
             latest = ((history or {}).get('data') or [None])[0]
             latest_id = latest.get('id') if isinstance(latest, dict) else None
 
-        # The public AgentAPI edge may buffer an idle SSE response until the
-        # first event arrives. Posting only after aiohttp has entered the stream
-        # context can therefore deadlock on a brand-new Session. Events are
-        # durable and the stream replays them, so submit first and use the last
-        # pre-turn event as a local replay boundary.
+        # The public AgentAPI edge can buffer SSE responses, including response
+        # headers, indefinitely. Submit the event first and poll the durable
+        # event log from the pre-turn cursor. The Open WebUI endpoint still
+        # streams each newly observed event to the browser as NDJSON.
         async with session.post(
             _url(base_url, f'/v1/sessions/{session_path}/events'),
             headers=headers,
@@ -184,22 +185,29 @@ async def stream_turn_events(
             await _raise_for_status(send_response)
             await send_response.read()
 
-        stream_headers = {**headers, 'accept': 'text/event-stream'}
-        async with session.get(
-            _url(base_url, f'/v1/sessions/{session_path}/events/stream'),
-            headers=stream_headers,
-        ) as stream_response:
-            await _raise_for_status(stream_response)
+        cursor = str(latest_id) if latest_id else None
+        saw_running = False
+        deadline = time.monotonic() + 900
+        while time.monotonic() < deadline:
+            params: dict[str, Any] = {'limit': 100, 'order': 'asc'}
+            if cursor:
+                params['page'] = cursor
+            async with session.get(
+                _url(base_url, f'/v1/sessions/{session_path}/events'),
+                headers=headers,
+                params=params,
+            ) as events_response:
+                await _raise_for_status(events_response)
+                page = await events_response.json()
 
-            saw_running = False
-            crossed_replay_boundary = latest_id is None
-            async for event in _iter_sse(stream_response):
-                if not crossed_replay_boundary:
-                    event_id = event.get('id') or event.get('_sse_id')
-                    if str(event_id or '') == str(latest_id):
-                        crossed_replay_boundary = True
+            events = page.get('data') if isinstance(page, dict) else None
+            events = events if isinstance(events, list) else []
+            for event in events:
+                if not isinstance(event, dict):
                     continue
-
+                event_id = event.get('id')
+                if event_id:
+                    cursor = str(event_id)
                 event_type = str(event.get('type') or '')
                 if event_type in {'session.status_running', 'session.status_rescheduling'}:
                     saw_running = True
@@ -215,6 +223,11 @@ async def stream_turn_events(
                     return
                 if event_type == 'session.status_terminated':
                     return
+
+            if not events:
+                await asyncio.sleep(0.5)
+
+        raise AgentAPIError('Timed out waiting for AgentAPI turn events', 504)
 
 
 def _extract_text(value: Any) -> str:
