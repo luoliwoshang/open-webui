@@ -16,14 +16,16 @@ Agent 与 Chat 是两种平级会话模式，但 Agent 的消息、状态和文�
 6. Agent 文件只通过对应 Session 的 FileAPI 实时列举、预览和流式下载，不使用本地 FileAPI、`file` 表或对象存储。
 7. API Key 始终只存在于后端配置和后端到 AgentAPI 的请求中。
 
-该方案的前提是七牛 AgentAPI 提供：
+目前已通过七牛 AgentAPI 测试接口确认：
 
-- 可持续复用的 Session ID；
-- Session 事件分页和状态查询；
-- 稳定的事件 ID、游标或顺序号；
-- Session FileAPI 的文件列表和读取能力；
-- 足够覆盖产品保留期限的 Session/文件保留策略；
-- 消息提交的幂等 request ID，或明确的重复提交语义。
+- `GET /v1/sessions/{session_id}` 返回 Session 状态、Agent、Environment、metadata 和更新时间；
+- `GET /v1/sessions/{session_id}/events?limit={n}` 返回 `data` 和 `next_page`，事件包含稳定 `id`、`sequence_number`、`processed_at`；
+- 继续请求 `page={next_page}` 可以读取下一页历史事件；
+- `POST /v1/sessions/{session_id}/events` 接受 `user.message`，响应返回已接收事件；
+- `GET /v1/files?scope_id={session_id}&limit={n}` 返回 Session 范围内文件和分页字段；
+- 文件元数据包含 `scope: {type: "session", id: session_id}`，内容接口可以直接流式读取。
+
+仍需在正式接入前确认 Session/FileAPI 的保留期限，以及消息提交是否支持显式幂等 request ID。若上游没有幂等能力，才增加本地去重表。
 
 ## 2. 现有代码复用范围
 
@@ -49,7 +51,7 @@ flowchart LR
     API --> DB[(Chat 表 / Config / AccessGrant)]
     API --> AD[AgentAPI Adapter]
     AD --> S[七牛 AgentAPI Session]
-    AD --> F[Session FileAPI]
+    AD --> F[Session-scoped FileAPI]
     API --> AUDIT[现有审计体系]
 ```
 
@@ -290,7 +292,7 @@ GET    /api/v1/agentapi/chats/{chat_id}/files/{file_id}/content
 DELETE /api/v1/chats/{chat_id}                 # 先删上游 Session，再删本地索引
 ```
 
-事件接口返回上游分页游标，不要求 Open WebUI 生成新的本地 sequence。所有路由先通过本地 Chat ID 进行身份和权限判断，再调用适配层。
+事件接口使用上游 `next_page` 作为下一次请求的 `page` 参数，不要求 Open WebUI 生成新的本地 sequence。文件接口使用 `scope_id` 查询 Session 文件，并在下载前再次校验返回 metadata 的 `scope.id`。所有路由先通过本地 Chat ID 进行身份和权限判断，再调用适配层。
 
 ## 10. 前端设计
 
