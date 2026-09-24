@@ -20,7 +20,113 @@ Content-Type: application/json
 Authorization: Bearer <AGENT_API_KEY>
 ```
 
-## 2. Session 列表
+## 2. 官方 SDK 验证
+
+已使用官方 SDK 完成创建 Session、提交事件、读取事件分页、读取文件和删除 Session 的闭环测试：
+
+```text
+Python: anthropic 1.8.0
+TypeScript: @anthropic-ai/sdk 0.128.0
+```
+
+两套 SDK 都会自动请求 `?beta=true`，并发送 AgentAPI 所需的 managed agents beta header。
+
+### Python SDK
+
+```python
+from anthropic import Anthropic
+
+client = Anthropic(
+    api_key=os.environ["AGENTAPI_API_KEY"],
+    base_url="https://agent.qiniuapi.com",
+)
+
+session = client.beta.sessions.create(
+    agent={"type": "agent", "id": agent_id, "version": agent_version},
+    environment_id=environment_id,
+)
+
+page = client.beta.sessions.events.list(
+    session.id,
+    limit=20,
+    order="asc",
+)
+```
+
+测试确认 `page.data` 是事件列表，`page.next_page` 是上游游标。`page.model_dump(mode="json")` 返回包含 `data` 和 `next_page` 的分页对象。
+
+发送事件时，SDK 的类型参数使用 `content`，而 AgentAPI 线路请求使用 `input.parts`。使用 `extra_body` 后，实际发出的请求体只有 AgentAPI 结构：
+
+```json
+{
+  "events": [
+    {
+      "type": "user.message",
+      "input": {
+        "parts": [{ "type": "text", "text": "任务内容" }]
+      }
+    }
+  ]
+}
+```
+
+### TypeScript SDK
+
+```ts
+const response = await client.beta.sessions.events.send(
+  session.id,
+  {
+    events: [
+      {
+        type: 'user.message',
+        content: [{ type: 'text', text: '任务内容' }],
+      },
+    ],
+  },
+  {
+    body: {
+      events: [
+        {
+          type: 'user.message',
+          input: { parts: [{ type: 'text', text: '任务内容' }] },
+        },
+      ],
+    },
+  },
+);
+```
+
+TypeScript 分页对象的原始信封在 `page.body`：
+
+```ts
+const page = await client.beta.sessions.events.list(session.id, {
+  limit: 20,
+  order: 'asc',
+});
+
+page.body.data;
+page.body.next_page;
+```
+
+`for await (const event of page)` 适合遍历事件，但会隐藏分页信封。Open WebUI 后端代理必须使用 `page.body`（或 Python 的 `page.model_dump()`）保留 `next_page`，不能只把迭代器产出的事件数组返回给前端。
+
+### 完整透传策略
+
+SDK 类型对象可以用于后端内部的类型检查和业务判断。若需要严格保留上游原始 JSON、未知扩展字段和原始响应头，使用 SDK 的 `with_raw_response`：
+
+```python
+raw = client.beta.sessions.events.with_raw_response.list(
+    session_id,
+    limit=20,
+    order="asc",
+)
+
+payload = raw.json()
+```
+
+测试确认 `raw.json()` 保留原始 `data`、`next_page` 和事件字段；文件下载使用 `client.beta.files.download(file_id)` 返回二进制响应，可直接流式代理。推荐后端适配器同时保留 typed page 和 raw page 两条路径：业务逻辑使用 typed page，代理响应使用 raw JSON。
+
+## 3. Session 列表
 
 ### 请求
 
@@ -72,7 +178,7 @@ GET /v1/sessions?limit={limit}&page={page}
 
 Open WebUI 不使用全量 Session 列表作为员工会话列表。它只使用本地 `chat` 索引筛选当前用户有权限的 Session，再按下面的单 Session 接口读取上游内容。
 
-## 3. 创建 Session
+## 4. 创建 Session
 
 ### 请求
 
@@ -140,7 +246,7 @@ environment_id is required
 invalid request body
 ```
 
-## 4. 查询 Session 状态
+## 5. 查询 Session 状态
 
 ### 请求
 
@@ -168,7 +274,7 @@ GET /v1/sessions/{session_id}
 
 页面恢复时先查询状态，再从事件分页加载内容。`idle`、`running` 等状态不能替代事件读取；前端应以最新事件和终态共同决定展示状态。
 
-## 5. 查询 Session 事件
+## 6. 查询 Session 事件
 
 ### 请求
 
@@ -229,7 +335,7 @@ span.model_request_start
 }
 ```
 
-## 6. 提交用户事件
+## 7. 提交用户事件
 
 ### 请求
 
@@ -275,7 +381,7 @@ POST /v1/sessions/{session_id}/events
 
 目前尚未确认上游是否支持显式 `request_id` 幂等键。适配器在确认前不得对超时的提交盲目自动重试；应返回“结果未知”，由用户根据事件分页确认。
 
-## 7. Session 文件列表
+## 8. Session 文件列表
 
 ### 请求
 
@@ -313,7 +419,7 @@ GET /v1/files?scope_id={session_id}&limit={limit}&page={page}
 
 Open WebUI 必须同时检查本地 `chat_id -> session_id` 绑定和每个返回文件的 `scope.type == 'session'`、`scope.id == session_id`，不能只凭用户传入的 `file_id` 下载。
 
-## 8. 读取 Session 文件内容
+## 9. 读取 Session 文件内容
 
 ### 请求
 
@@ -335,7 +441,7 @@ Content-Disposition: attachment; filename="换命千金_前十集单集剧本/�
 
 响应字节数与文件列表中的 `size_bytes` 一致。Open WebUI 直接流式代理响应，不写本地 `file` 表、不写本地文件，也不上传对象存储。Range/断点下载尚未单独验证，第一版不依赖该能力。
 
-## 9. 删除 Session
+## 10. 删除 Session
 
 ### 请求
 
@@ -353,7 +459,7 @@ DELETE /v1/sessions/{session_id}
 
 Open WebUI 删除 Agent 会话时先调用上游删除。上游删除成功后再删除本地 `chat` 索引；上游失败则保留本地绑定并允许重试。Session 文件随上游 Session 生命周期处理。
 
-## 10. 尚未纳入第一版契约的能力
+## 11. 尚未纳入第一版契约的能力
 
 以下能力不是当前轻量方案的必需依赖，不能在未验证前作为实现前提：
 
@@ -365,7 +471,7 @@ Open WebUI 删除 Agent 会话时先调用上游删除。上游删除成功后�
 
 第一版不依赖这些能力：Agent 配置保存管理员填写的 ID、页面使用事件分页轮询、超时提交不自动重试。若后续确认上游接口，再作为兼容增强加入适配器。
 
-## 11. Open WebUI 适配器映射
+## 12. Open WebUI 适配器映射
 
 | Open WebUI 业务动作 | 上游接口 |
 | --- | --- |

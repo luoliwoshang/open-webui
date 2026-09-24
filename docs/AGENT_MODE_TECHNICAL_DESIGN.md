@@ -144,6 +144,8 @@ Agent 配置授权使用现有 user/group grant 语义：`read` 表示可以看�
 backend/open_webui/utils/agentapi.py
 ```
 
+适配器使用七牛 AgentAPI 官方推荐的 `anthropic` Python SDK，通过 `base_url` 指向七牛服务。SDK 负责认证、Session、事件分页和 FileAPI 请求；适配器负责 Open WebUI 权限校验、Session 绑定、`extra_body` 请求格式兼容和原始响应透传。完整 SDK 调用和分页注意事项见 [AgentAPI 接口契约](AGENT_MODE_AGENTAPI_REFERENCE.md)。
+
 业务路由不直接拼接七牛 URL。适配层负责鉴权、超时、错误转换、游标和流式文件代理，提供：
 
 ```text
