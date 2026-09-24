@@ -1,450 +1,419 @@
-# Open WebUI Agent 模式技术实现方案
+# Open WebUI Agent 模式轻量技术方案
 
-## 1. 设计结论
+## 1. 设计原则
 
-Agent 是与 Chat 平级的会话模式。两种模式共享登录用户、群组、组织、权限和审计能力，但拥有独立的会话、消息协议、路由和前端状态模型。Agent 产出文件由七牛 AgentAPI Session 的 FileAPI 保存和提供。
+Agent 与 Chat 是两种平级会话模式，但 Agent 的消息、状态和文件全部由七牛 AgentAPI Session 提供。Open WebUI 保存最小的本地会话索引，用于用户归属、权限、会话列表和管理操作。
 
-核心决策如下：
+本方案不在 Open WebUI 保存 Agent 消息正文、事件历史或文件副本，也不为每个 Session 建立本地任务表。加载 Agent 会话时，后端完成权限校验后，代理请求到对应 AgentAPI Session 的分页接口和 Session FileAPI。
 
-1. 新增 Agent 专用数据表和 API，不在现有 `chat.chat` JSON 中塞入 Agent 事件，也不通过 `meta.type=agent` 伪装 Chat。
-2. 每个本地 Agent 会话绑定一个七牛 AgentAPI Session；创建时保存 Agent ID、Version、Environment 的不可变快照。
-3. AgentAPI 的每一条事件先写入数据库，再广播到浏览器。Socket.IO 只负责实时通知，不能作为唯一消息存储。
-4. 长任务由持久化的 `run/event` 记录和独立 Worker 执行；Redis 用于锁、队列和广播，不承担历史消息的唯一持久化。
-5. Agent 使用权限、Agent 会话读取权限、Agent 会话管理权限分开判断。普通用户只能读自己的会话，管理员复用当前 Chat 管理范围。
-6. Agent 文件由 Session FileAPI 实时列举并按需流式转发；Open WebUI 只做身份、会话归属和文件权限校验，不复制文件到本地或对象存储，也不向浏览器暴露七牛 API Key。
-7. 默认开发环境可以继续使用 SQLite；生产环境推荐 PostgreSQL 和 Redis，并将 Web、Worker 分开部署。Agent 文件不需要额外的对象存储。
+核心约束：
 
-## 2. 当前代码基线
+1. Agent 会话创建时确定模式，不能转换为 Chat；Chat 也不能转换为 Agent。
+2. 七牛 AgentAPI Session 是 Agent 消息、执行状态和文件的唯一事实源。
+3. Open WebUI 只保存本地 Chat 索引和上游 Session 绑定，不保存 Agent 消息内容。
+4. Agent 长任务由七牛侧持续执行；Open WebUI 不使用进程内后台任务，也不长期持有 SSE。
+5. 页面打开时使用事件分页轮询；页面关闭、浏览器断开或 Open WebUI 重启不影响上游 Session。
+6. Agent 文件只通过对应 Session 的 FileAPI 实时列举、预览和流式下载，不使用本地 FileAPI、`file` 表或对象存储。
+7. API Key 始终只存在于后端配置和后端到 AgentAPI 的请求中。
 
-当前仓库的相关实现边界如下：
+该方案的前提是七牛 AgentAPI 提供：
 
-| 能力 | 当前实现 | Agent 方案的使用方式 |
-| --- | --- | --- |
-| Web 入口 | `backend/open_webui/main.py`，FastAPI/Uvicorn，路由位于 `/api/v1/...` | 增加 Agent 路由和启动 Worker |
-| Chat 数据 | `models/chats.py` 的 `chat`、`chat_file`，`models/chat_messages.py` 的 `chat_message` | 不复用 Chat 消息协议，新增 Agent 表 |
-| 授权 | `models/access_grants.py` 的 user/group/anyone、read/write grant | Agent 配置使用 grant；会话仍按 owner/admin 范围判断 |
-| 群组 | `models/groups.py` | 复用组成员解析和用户选择器 |
-| 管理员 Chat 访问 | `ENABLE_ADMIN_CHAT_ACCESS`、`get_user_chat_list_by_user_id` 等逻辑 | Agent 会话列表/详情调用同等管理员判定 |
-| 文件 | `models/files.py`、`routers/files.py`、`utils/access_control/files.py` | 借鉴现有鉴权与预览方式；Agent 文件直接使用七牛 Session FileAPI，不写入现有 `file` 表 |
-| 实时通信 | `socket/main.py` 的 Socket.IO 和 `events:chat` | 增加独立 Agent 事件名；断线后从数据库补齐 |
-| 任务 | `tasks.py` 的进程内 `asyncio.Task`，Redis 为可选临时协调 | 不足以保证重启恢复，Agent 使用持久化 Worker |
-| 数据库 | SQLAlchemy Async、Alembic，默认 SQLite，可用 PostgreSQL | 新增 Alembic migration 和索引 |
-| 审计 | `AuditLoggingMiddleware` 及现有审计事件 | 为配置、查看、下载、删除和管理操作补充 subject/action |
+- 可持续复用的 Session ID；
+- Session 事件分页和状态查询；
+- 稳定的事件 ID、游标或顺序号；
+- Session FileAPI 的文件列表和读取能力；
+- 足够覆盖产品保留期限的 Session/文件保留策略；
+- 消息提交的幂等 request ID，或明确的重复提交语义。
 
-## 3. 总体架构
+## 2. 现有代码复用范围
+
+| 现有能力 | Agent 使用方式 |
+| --- | --- |
+| `backend/open_webui/main.py` | 挂载 Agent 路由 |
+| `models/chats.py` 的 `chat` 表 | 保存 Agent 本地索引、owner、标题、归档、文件夹和上游 Session 绑定 |
+| `Chat.mode` | 区分 `chat` 与 `agent` |
+| `models/config.py` 的 Config | 保存 AgentAPI 地址、启用状态、Key 掩码状态和 Agent 配置 |
+| `access_grant`、Groups | 控制 Agent 查看/使用权限 |
+| `ENABLE_ADMIN_CHAT_ACCESS` | 控制管理员查看员工 Agent 会话的范围 |
+| `AuditLoggingMiddleware` | 记录配置、查看、文件下载、删除和管理行为 |
+| `models/files.py`、`routers/files.py` | 不用于 Agent 文件内容；只借鉴现有预览和鉴权交互 |
+| Socket.IO | Agent v1 不依赖；实时性由事件分页轮询实现 |
+| SQLite | 单实例默认数据库，保存本地索引和权限数据 |
+
+## 3. 系统架构
 
 ```mermaid
 flowchart LR
     UI[Agent Web UI] --> API[FastAPI Agent Router]
-    API --> AUTH[Open WebUI 身份/权限/审计]
-    API --> DB[(PostgreSQL / SQLite)]
-    API --> Q[Redis Queue / PubSub]
-    Q --> W[Agent Worker]
-    W --> AD[AgentAPI Adapter]
-    AD --> QA[七牛 AgentAPI]
-    W --> DB
-    W --> WS[Socket.IO Broadcast]
-    WS --> UI
-    API --> FILE[Session FileAPI: 列表/预览/下载]
-    FILE --> QA
+    API --> AUTH[Open WebUI 身份与权限]
+    API --> DB[(Chat 表 / Config / AccessGrant)]
+    API --> AD[AgentAPI Adapter]
+    AD --> S[七牛 AgentAPI Session]
+    AD --> F[Session FileAPI]
+    API --> AUDIT[现有审计体系]
 ```
 
-### 3.1 进程和部署角色
+### 3.1 进程模型
 
-- **Web**：处理登录、权限、Agent 配置、会话读写、提交 run、文件下载和 Socket.IO 连接。
-- **Worker**：领取 `queued/running` run，创建或复用上游 Session，消费事件流，持久化事件，更新终态，并在文件变化时通知前端刷新列表。
-- **Scheduler（可选）**：扫描超时 run、回收孤儿锁和触发重试。
-- **PostgreSQL**：生产环境的会话、事件、权限快照、游标和审计数据主库。
-- **Redis**：分布式锁、队列、实时广播和短期去重缓存。消息历史不只存 Redis。
-- **七牛 Session FileAPI**：Agent 产出文件的唯一内容来源。Web 根据当前会话的上游 Session ID 实时列举文件，并在鉴权后流式代理预览/下载。
-
-单实例部署时可先运行 Web 和 Worker 两个进程，使用 SQLite 或 PostgreSQL；多副本部署需要共享数据库和 Redis，并使用租约锁防止同一 run 被多个 Worker 同时消费。Agent 文件不在 Open WebUI 侧落盘。
-
-## 4. AgentAPI 适配层
-
-当前需求只给出了 `Session`、`agent.message`、状态和文件语义，没有附上七牛 AgentAPI 文档正文或链接。因此不在业务层假定具体 URL、HTTP 方法、SSE/WebSocket 帧格式或字段名称，统一通过适配层隔离：
+单实例只运行现有 Open WebUI Web 进程和数据库：
 
 ```text
-backend/open_webui/agent/
-  client.py       # HTTP/SSE/WebSocket、认证、超时、重试
-  adapter.py      # 七牛协议 -> Open WebUI 标准事件
-  models.py       # Provider/Agent/Session/Run/Event 的内部类型
-  worker.py       # 任务领取和执行
-  events.py       # 事件校验、去重、排序、状态机
-  files.py        # Session FileAPI 列举、归属校验、流式代理
-  errors.py       # 可重试/不可重试错误分类
+Docker open-webui
+  ├── FastAPI / Svelte
+  ├── SQLite: /app/backend/data/webui.db
+  └── AgentAPI Adapter -> 七牛 AgentAPI
 ```
 
-业务路由只能调用 `AgentAPIClient`/`AgentAdapter`，不能拼接七牛 URL 或读取 API Key。适配层至少提供以下内部接口：
+Agent 不需要单独 Worker、Redis、S3 或本地文件目录。七牛 AgentAPI Session 负责长任务的持续执行和历史保留。
+
+## 4. 最小本地数据设计
+
+### 4.1 复用 `chat` 表作为会话索引
+
+创建 Agent 会话时，新增一条 `chat` 记录：
+
+| 字段 | 用途 |
+| --- | --- |
+| `id` | Open WebUI 本地会话 ID，前端只使用此 ID |
+| `user_id` | 会话 owner |
+| `mode` | 固定为 `agent` |
+| `title` | 本地显示标题 |
+| `archived`、`pinned`、`folder_id` | 复用现有会话管理能力 |
+| `created_at`、`updated_at` | 本地列表排序和未读提示 |
+| `meta.agentapi.profile_id` | 创建时使用的 Agent 配置 ID |
+| `meta.agentapi.profile_name` | 创建时的 Agent 名称快照 |
+| `meta.agentapi.session_id` | 七牛 AgentAPI Session ID |
+| `meta.agentapi.agent_id` | 创建时 Agent ID 快照 |
+| `meta.agentapi.agent_version` | 创建时 Version 快照 |
+| `meta.agentapi.environment_id` | 创建时 Environment 快照 |
+
+`chat.chat` 只保留最小结构，不写入 Agent 消息和事件；Agent 不双写到 `chat_message`。本地 Chat 行存在的目的是提供 owner、管理员范围、列表、归档、删除和审计关联。
+
+### 4.2 Agent 配置
+
+第一版可复用现有 Config JSON 保存：
 
 ```text
-health_check(config)
-create_session(agent_snapshot) -> UpstreamSession
-get_session(upstream_session_id)
-submit_message(upstream_session_id, request_id, content, attachments)
-stream_run(upstream_session_id, upstream_run_id) -> AsyncIterator[NormalizedEvent]
-list_session_files(upstream_session_id) -> list[SessionFile]
-stream_session_file(upstream_session_id, upstream_file_id, range_header=None) -> AsyncIterator[bytes]
-cancel_run(upstream_session_id, upstream_run_id)
+agentapi.enabled
+agentapi.base_url
+agentapi.api_key
+agentapi.profiles[]
+```
+
+每个 profile 至少包含：
+
+```json
+{
+  "id": "internal-profile-id",
+  "name": "报告 Agent",
+  "description": "...",
+  "agent_id": "qiniu-agent-id",
+  "agent_version": 1,
+  "environment_id": "qiniu-environment-id",
+  "enabled": true,
+  "access_grants": []
+}
+```
+
+Agent 配置授权使用现有 user/group grant 语义：`read` 表示可以看到 Agent，`write` 表示可以创建会话和发送消息。管理员配置权限继续使用现有 workspace/admin 权限。
+
+### 4.3 可选幂等表
+
+如果七牛消息提交接口原生支持幂等 `request_id`，不增加任何新表，直接把前端 `client_request_id` 传给上游。
+
+如果七牛不提供幂等能力，只增加一张很小的 `agent_request_dedupe` 表：
+
+| 字段 | 用途 |
+| --- | --- |
+| `session_id` | 本地 Chat ID 或上游 Session ID |
+| `client_request_id` | 客户端生成的幂等键 |
+| `upstream_request_id` | 上游确认 ID |
+| `created_at` | TTL 清理依据 |
+
+唯一约束为 `(session_id, client_request_id)`。该表只解决重复提交，不保存消息内容、事件或文件。
+
+## 5. AgentAPI 适配层
+
+新增轻量适配模块：
+
+```text
+backend/open_webui/utils/agentapi.py
+```
+
+业务路由不直接拼接七牛 URL。适配层负责鉴权、超时、错误转换、游标和流式文件代理，提供：
+
+```text
+verify_connection(config)
+create_session(agent_snapshot) -> upstream_session
+get_session(upstream_session_id) -> session_status
+submit_message(upstream_session_id, request_id, content, attachments) -> ack
+list_session_events(upstream_session_id, cursor, limit) -> event_page
+list_session_files(upstream_session_id) -> file_page
+stream_session_file(upstream_session_id, file_id, range_header) -> byte_stream
+cancel_session_run(upstream_session_id, upstream_run_id)
 delete_session(upstream_session_id)
 ```
 
-`NormalizedEvent` 统一为：`upstream_event_id`、`sequence`（若上游提供）、`event_type`、`payload`、`terminal_status`、`occurred_at`、`file_refs`。适配层必须保留 `raw_payload`，便于审计和协议升级，但要对密钥、Authorization、Cookie 等字段做脱敏。
+适配层返回给前端的事件至少包含：
 
-需要拿到七牛文档后确认的内容：
+```text
+event_id
+event_type
+sequence/cursor
+content or structured payload
+created_at
+terminal_status
+```
 
-- API Key 的 Header、签名或其他鉴权方式及 Key 轮换接口。
-- Session 创建、恢复、删除和取消的 HTTP 方法、幂等字段和响应字段。
-- 消息提交是同步响应、SSE、WebSocket 还是轮询；事件是否带稳定 ID 和顺序号。
-- `agent.message` 的角色、消息类型、思考/进度/工具/正文字段和终态字段。
-- Session FileAPI 的文件列表、文件读取、删除和保留期限，以及 `/mnt/session/outputs/` 的可见性语义；确认文件读取是否支持 Range。
-- 上游限流、超时、错误码、断点续传和重连规则。
+每个 `agent.message` 按上游事件边界返回，前端逐条渲染。Open WebUI 不把这些事件写入数据库。
 
-## 5. 数据模型
-
-所有 ID 使用随机 UUID/ULID，外部上游 ID 单独保存。时间字段沿用当前项目的 epoch timestamp 习惯。以下为建议表，字段可按仓库现有 SQLAlchemy 风格实现。
-
-### 5.1 `agent_provider_config`
-
-保存全局七牛服务配置。API Key 加密存储或放在受控 Secret store，API 响应只返回是否已配置和掩码值。
-
-| 字段 | 说明 |
-| --- | --- |
-| `id` | 单例或配置版本 ID |
-| `base_url` | AgentAPI 服务地址 |
-| `api_key_ciphertext` | 加密后的 Key，不返回前端 |
-| `enabled` | 服务启用状态 |
-| `timeout_seconds` | 连接/读取超时 |
-| `updated_by`, `updated_at` | 管理审计信息 |
-
-### 5.2 `agent_definition`
-
-| 字段 | 说明 |
-| --- | --- |
-| `id` | Open WebUI 内部 Agent ID |
-| `name`, `description` | 展示信息 |
-| `upstream_agent_id` | 七牛 Agent ID |
-| `agent_version` | 当前引用版本 |
-| `environment_id` | 当前引用环境 |
-| `skill_refs` | 七牛 Skill 引用的 JSON |
-| `enabled` | 禁用后不能创建新会话 |
-| `created_by`, `created_at`, `updated_at` | 管理信息 |
-
-Agent 使用授权建议统一写入 `access_grant`，使用 `resource_type='agent'`、`resource_id=agent_definition.id`。`read` 表示可看到 Agent，`write` 表示可创建/发送会话。若未来需要独立的管理权限，再增加 `manage` 维度或使用现有 workspace 权限，而不是把管理权限授给普通 grant。
-
-### 5.3 `agent_conversation`
-
-| 字段 | 说明 |
-| --- | --- |
-| `id` | 本地会话 ID |
-| `owner_user_id` | 会话创建者 |
-| `agent_definition_id` | 创建时所选 Agent |
-| `upstream_session_id` | 七牛 AgentAPI Session ID，唯一 |
-| `snapshot_agent_id` | 创建时快照 |
-| `snapshot_agent_version` | 创建时快照 |
-| `snapshot_environment_id` | 创建时快照 |
-| `title` | 本地标题 |
-| `status` | `active/running/completed/failed/cancelled/deleting/deleted` |
-| `archived`, `deleted_at` | 本地生命周期 |
-| `last_event_sequence`, `last_read_at` | 补齐和未读状态 |
-| `created_at`, `updated_at` | 时间 |
-
-对 `upstream_session_id` 建唯一索引；创建会话后永远使用快照字段，不回读 Agent 当前版本，避免管理员修改配置影响历史会话。
-
-### 5.4 `agent_run`
-
-一次用户提交对应一个 run。
-
-| 字段 | 说明 |
-| --- | --- |
-| `id` | 本地 run ID |
-| `conversation_id` | 所属会话 |
-| `client_request_id` | 客户端幂等键，按会话唯一 |
-| `upstream_run_id` | 上游 run ID |
-| `input_event_id` | 用户输入事件 |
-| `status` | `queued/running/succeeded/failed/cancelled/unknown` |
-| `attempt`、`next_retry_at` | 重试控制 |
-| `lease_owner`、`lease_expires_at` | Worker 租约 |
-| `error_code`、`error_message` | 脱敏错误 |
-| `started_at`、`finished_at` | 执行时间 |
-
-唯一约束建议为 `(conversation_id, client_request_id)`，防止浏览器重试创建两个相同任务。
-
-### 5.5 `agent_event`
-
-每一条用户消息、`agent.message`、思考、进度、工具调用、工具结果、状态和错误都保存为独立事件。
-
-| 字段 | 说明 |
-| --- | --- |
-| `id` | 本地事件 ID |
-| `conversation_id`, `run_id` | 所属会话和 run |
-| `upstream_event_id` | 上游稳定 ID（如有） |
-| `sequence` | 本地单调序号 |
-| `event_type` | `user.message`、`agent.message`、`agent.thought`、`tool.call`、`tool.result`、`run.status`、`error` 等 |
-| `display_content` | 前端展示内容，可为空 |
-| `payload_json` | 结构化内容 |
-| `raw_payload_json` | 脱敏后的原始事件 |
-| `created_at` | 入库时间 |
-
-唯一约束使用 `(run_id, upstream_event_id)`；没有上游 ID 时使用 `(run_id, upstream_sequence)` 或规范化 payload 哈希。这样重连和上游重复推送不会重复污染消息。`agent.message` 严格一条事件对应一个展示消息，不能按 run 合并。
-
-### 5.6 Session 文件
-
-Agent 文件不新建 `agent_artifact` 内容表，也不写入现有 `file` 表。文件内容和当前文件列表以七牛 Session FileAPI 为准；本地 `agent_conversation.upstream_session_id` 是取得文件的关联依据。文件事件保留在 `agent_event` 中，记录上游文件 ID、文件名等原始元数据，供消息历史和审计使用，但不作为下载授权依据。
-
-前端每次进入会话、收到文件事件及 run 结束时，通过后端查询 Session FileAPI 获取文件名、类型、大小和生成时间。运行中可低频刷新，以发现未在消息事件中引用的产出文件。后端可以短时缓存文件列表，但必须按 Session 隔离；下载前仍需向 Session FileAPI 验证文件属于该 Session。
-
-下载接口不在 Open WebUI 侧做完整文件缓冲：如果七牛 FileAPI 支持流式读取、Range 或 chunk，后端按块实时转发；如果它只能读取已完成文件，则文件完成后立即开始流式转发。无论哪种情况，Open WebUI 都不保存文件副本。
-
-该设计要求七牛 Session 文件的保留期限覆盖产品承诺的会话保留期限。若上游会提前清理文件，Open WebUI 无法在不保存副本的前提下保证历史文件持续可下载，必须先确认上游保留策略，不能仅靠本地元数据声称文件仍可用。
-
-## 6. AgentAPI 调用和任务流程
+## 6. 会话和消息流程
 
 ### 6.1 创建会话
 
-1. 前端调用 `POST /api/v1/agent-sessions`，提交 `agent_id` 和可选标题。
-2. 后端验证当前用户身份、Agent `enabled`、Agent 使用 `write` 权限和 Provider 已启用。
-3. 后端读取 Agent 配置并写入版本/环境快照。
-4. 调用适配层创建七牛 Session；成功后在同一事务中写入 `agent_conversation`。
-5. 上游创建失败不写入可见会话，或写入 `creation_failed` 后由清理任务回收，不能返回没有上游 Session 的“可用会话”。
+1. 用户选择已授权且启用的 Agent。
+2. 后端检查 Agent `write` 权限和 AgentAPI 全局启用状态。
+3. 后端使用创建时的 Agent ID、Version、Environment 调用 AgentAPI 创建 Session。
+4. 上游返回 Session ID 后，写入一条 `chat.mode='agent'` 的本地索引记录和配置快照。
+5. 本地写入失败时，调用上游删除 Session，避免产生孤儿 Session。
 
-### 6.2 发送消息
+### 6.2 加载会话
 
-1. 前端立即将输入置为本地 pending，并带 `client_request_id`。
-2. `POST /api/v1/agent-sessions/{id}/runs` 做会话读取/写入权限检查和状态检查。
-3. 事务写入 `agent_run(status=queued)` 与 `agent_event(event_type=user.message)`，提交后返回 `run_id`。
-4. Worker 领取 run，使用会话保存的 `upstream_session_id` 提交消息，不创建新 Session。
-5. Worker 收到每个 AgentAPI 事件后：校验 -> 去重 -> 写 `agent_event` -> 更新 run/conversation 状态 -> 广播 Socket.IO。发现文件事件或 run 结束时通知前端重新查询 Session 文件列表。
-6. 收到明确终态后写 `succeeded/failed/cancelled`；没有终态但连接中断时写 `unknown` 或按协议进入重连，不直接标记成功。
+1. 浏览器只提交本地 `chat_id`，不提交可任意访问的上游 Session ID。
+2. 后端按 `chat_id` 查询本地 Chat 行并执行 owner/admin 权限检查。
+3. 后端从 `meta.agentapi.session_id` 读取上游 Session ID。
+4. 后端调用 AgentAPI Session 状态和事件分页接口。
+5. 返回事件页、`next_cursor`、Session 状态和本地会话元数据。
 
-### 6.3 事件处理原则
+刷新、重新登录和 Web 重启都重复上述流程，因此不依赖本地消息缓存。
 
-- 事件入库和广播顺序固定为“数据库提交后广播”。
-- 前端事件包含 `conversation_id`、`run_id`、`event_id`、`sequence`、`event_type`。
-- 前端不依赖实时事件补发；重连先调用历史接口，按 `sequence` 补齐后再订阅。
-- 上游乱序时先落库，读取接口按 sequence/created_at 排序；若协议只支持顺序流，则由适配层分配本地序号。
-- 原始 payload 必须大小限制和敏感字段脱敏。若上游返回超大事件，适配层需定义截断或分页策略；不能假设 Agent 文件能替代事件历史。
+### 6.3 发送消息
 
-## 7. 长任务、断线恢复和并发控制
+1. 前端立即显示本地 pending 用户消息，不要求先写入 Open WebUI 数据库。
+2. 前端生成 `client_request_id`，调用 Agent 消息提交接口。
+3. 后端校验本地会话权限、Agent 会话状态和请求幂等键。
+4. 后端将消息提交到同一个上游 Session，并返回上游 ack/request ID。
+5. 页面打开期间轮询事件分页和 Session 状态；事件按游标追加到当前页面。
+6. 页面关闭后停止轮询，AgentAPI 继续执行；用户再次进入时从上游分页加载完整结果。
 
-### 7.1 Worker 租约
+### 6.4 轮询策略
 
-Worker 从 Redis 队列或数据库扫描领取 queued run，在数据库中原子更新 `lease_owner/lease_expires_at`。处理期间定期续租；租约过期后其他 Worker 可接管。一个会话默认只允许一个 active run，除非七牛协议明确支持并发消息，否则发送新消息时返回 409。
+- 提交后前 30 秒每 1~2 秒查询一次。
+- 任务持续执行时可退避到 3~5 秒。
+- Session 进入终态后停止轮询，并刷新一次文件列表。
+- 浏览器重新获得焦点或网络恢复时，使用最后一个游标补查。
+- 不使用 Open WebUI 常驻 SSE、Socket.IO 事件补发或进程内后台任务。
 
-### 7.2 服务重启恢复
+## 7. 文件处理
 
-启动时扫描：
+Agent 文件只属于对应 AgentAPI Session。
 
-- `queued`：重新入队。
-- `running` 且租约过期：标记为 `unknown`，按上游能力执行 `get_run`/重连；无法查询时进入有限重试，最终标记 `failed` 并说明结果未知。
-- `succeeded/failed/cancelled`：不重放，不重复调用上游。
-
-浏览器断开只影响 Socket.IO 连接，不取消 Worker。用户重新进入会话时按会话详情、事件分页、产出文件列表加载最新状态。
-
-### 7.3 事件幂等
-
-优先使用上游事件 ID；没有稳定 ID 时使用上游 sequence，仍没有时使用“run + 类型 + 序号 + payload hash”。数据库唯一约束是最终防线，Redis 去重只做性能优化，不能作为正确性依据。
-
-## 8. 权限、管理员审计和文件安全
-
-### 8.1 三层权限
-
-1. **Agent 使用权限**：用户是否能看到 Agent、创建会话和发送消息。由 `access_grant(resource_type='agent')` 的 read/write 与群组成员关系决定。
-2. **会话读取权限**：普通用户只能读取 `owner_user_id == user.id` 的会话；共享/审计读取走明确的会话权限函数。
-3. **会话管理权限**：删除、归档、共享、取消和查看审计数据，分别复用当前 Chat 的用户权限和管理员规则。
-
-管理员读取员工 Agent 会话时，调用与 Chat 相同的 `ENABLE_ADMIN_CHAT_ACCESS` 和管理员检查路径。当前代码主要是全局 admin + 开关语义，因此 v1 应保持这一实际行为；如果部署版本已经有组织/上级范围，应抽出共享的 `can_manage_user_content(actor, owner, resource_type)`，让 Chat 和 Agent 共用，而不是复制一套范围判断。
-
-### 8.2 文件下载
-
-`GET /api/v1/agent-sessions/{session_id}/files/{file_id}/download` 必须按以下顺序检查：登录 -> 本地会话存在 -> 当前用户有会话读取权限 -> 调用 Session FileAPI 校验 `file_id` 属于该 `upstream_session_id` -> 从上游响应流式转发。不能接受客户端传入任意上游 URL、Session ID 或绕过会话校验的文件 ID。
-
-文件列表由 `GET /api/v1/agent-sessions/{session_id}/files` 实时查询 Session FileAPI，展示文件名、MIME、大小、生成时间和预览能力。支持预览的类型可复用现有 FileNav 组件；未知类型只提供下载。下载、预览均由后端代理，浏览器只看到 Open WebUI 路由，不看到 API Key。
-
-### 8.3 密钥和审计
-
-- API Key 只在后端配置页提交，存储时加密或使用 Secret Manager。
-- 不返回前端，不写浏览器存储，不写完整请求日志；异常日志只记录配置 ID 和脱敏 URL。
-- Agent 配置创建/修改/启停、会话查看、事件导出、文件下载、取消/删除、重试都写现有审计体系。
-- 管理员查看员工内容时记录 actor、owner、conversation、run、动作和结果，不记录完整消息正文到审计日志。
-
-## 9. 后端 API 建议
-
-路由沿用 `/api/v1`，实际 Pydantic 字段以仓库命名规范为准：
+### 7.1 文件列表
 
 ```text
-GET    /api/v1/agent-config
-PUT    /api/v1/agent-config
-POST   /api/v1/agent-config/test
-
-GET    /api/v1/agents
-POST   /api/v1/agents
-GET    /api/v1/agents/{agent_id}
-PATCH  /api/v1/agents/{agent_id}
-DELETE /api/v1/agents/{agent_id}
-PUT    /api/v1/agents/{agent_id}/access
-
-POST   /api/v1/agent-sessions
-GET    /api/v1/agent-sessions
-GET    /api/v1/agent-sessions/{session_id}
-DELETE /api/v1/agent-sessions/{session_id}
-PATCH  /api/v1/agent-sessions/{session_id}/archive
-
-POST   /api/v1/agent-sessions/{session_id}/runs
-GET    /api/v1/agent-sessions/{session_id}/runs
-GET    /api/v1/agent-sessions/{session_id}/events?after_sequence=...
-GET    /api/v1/agent-sessions/{session_id}/files
-GET    /api/v1/agent-sessions/{session_id}/files/{file_id}/download
-POST   /api/v1/agent-runs/{run_id}/cancel
-POST   /api/v1/agent-runs/{run_id}/retry
+GET /api/v1/agent/chats/{chat_id}/files
 ```
 
-所有详情、事件和文件接口都由服务端从当前用户推导权限，不接受 `owner_user_id` 作为授权依据。列表接口需要分页，事件接口支持 `after_sequence`/`limit`，避免长会话一次返回全部 payload。
+后端先校验本地 Chat 权限，再使用绑定的上游 Session ID 调用 Session FileAPI。返回文件名、类型、大小、生成时间、文件 ID 和是否可预览。
 
-建议统一错误码：`AGENT_DISABLED`、`AGENT_FORBIDDEN`、`SESSION_NOT_FOUND`、`SESSION_CLOSED`、`RUN_CONFLICT`、`UPSTREAM_TIMEOUT`、`UPSTREAM_RATE_LIMITED`、`UPSTREAM_PROTOCOL_ERROR`、`SESSION_FILE_NOT_FOUND`、`SESSION_FILE_EXPIRED`。返回给用户的 `error_message` 要可理解，内部 traceback 只进服务端日志。
-
-## 10. 前端页面和交互
-
-### 10.1 用户端
-
-新增独立入口和 URL，例如：
+### 7.2 文件下载和预览
 
 ```text
-src/routes/(app)/agents/+page.svelte
-src/routes/(app)/agents/[id]/+page.svelte
-src/lib/apis/agents/index.ts
-src/lib/components/agents/
+GET /api/v1/agent/chats/{chat_id}/files/{file_id}/content
 ```
 
-Sidebar 明确显示 Chat/Agent 两个入口；Chat 使用既有 `/c/{chat_id}`，Agent 使用 `/a/{agent_session_id}`。创建页先选择已授权 Agent，再创建会话。Agent 页面独立实现消息列表和状态栏，不复用普通 Chat 的 assistant message 协议。
+处理顺序：
 
-事件展示至少区分：用户消息、`agent.message`、思考、进度、工具调用、工具结果、文件产出、运行中、成功、失败、取消。每条 `agent.message` 单独渲染和保存；正文、思考和工具事件可以折叠，但不能合并丢失边界。运行状态来自服务端 `agent_run.status`，有终态就不得继续显示 working。
+1. 校验当前用户可读取该本地 Chat。
+2. 从本地 Chat 元数据得到上游 Session ID。
+3. 调用 Session FileAPI 验证 `file_id` 属于该 Session。
+4. 后端把上游响应流式转发给浏览器。
 
-页面初始化顺序：获取会话详情 -> 获取事件分页 -> 查询 Session FileAPI 文件列表 -> 连接 Socket.IO -> 使用最后 sequence 订阅增量。收到文件事件或 run 结束时刷新文件列表；断线重连重复该过程，允许重复事件但由前端 event_id 去重。
+Open WebUI 不写本地文件、不写 `file` 表、不上传对象存储，也不把七牛 API Key 或上游地址返回浏览器。如果 FileAPI 支持 Range/chunk，则直接透传；如果只能读取已完成文件，则文件完成后立即开始转发。
 
-### 10.2 管理端
+### 7.3 文件保留前提
 
-建议新增：
+不做本地副本意味着历史文件能否继续下载完全取决于七牛 Session/FileAPI 的保留期限。该期限必须覆盖产品承诺的会话保留期限；否则只能把“文件已被上游清理”作为明确的过期状态返回。
+
+## 8. 权限和安全
+
+### 8.1 Agent 使用权限
+
+- Agent 列表使用 `read` grant。
+- 创建会话和发送消息使用 `write` grant。
+- Agent 禁用后禁止新建会话；已有会话是否继续由产品开关决定，默认允许继续查看和完成。
+
+### 8.2 会话权限
+
+- 普通用户只能访问自己 `user_id` 对应的 Agent Chat。
+- 管理员使用现有 `ENABLE_ADMIN_CHAT_ACCESS` 和 Chat 管理范围读取员工 Agent Chat。
+- 任何 Agent 事件、状态和文件路由都必须通过本地 Chat ID 查找绑定，不接受客户端直接指定上游 Session ID。
+- 文件权限以“本地 Chat 可读 + FileAPI 文件属于该 Session”为双重条件。
+
+### 8.3 Chat/Agent 边界
+
+以下通用 Chat 操作必须拒绝 Agent 会话：
+
+- 普通 Chat 消息编辑、删除和手动写入历史；
+- Chat completion、模型切换和普通 Chat fork/clone；
+- 将 Agent 导入为普通 Chat；
+- 通过普通 Chat share 接口暴露 Agent Session。
+
+以下管理操作可以复用现有 Chat 能力，但仍须保留 `mode=agent`：
+
+- 标题、归档、置顶、文件夹、删除；
+- 管理员按现有范围查看；
+- 审计记录和必要的内容导出。
+
+### 8.4 API Key
+
+- 只允许管理员配置。
+- 后端存储，推荐加密或使用 Secret Manager。
+- 不返回前端、不写 localStorage、不进入普通用户响应。
+- 日志只记录配置 ID、请求 ID 和脱敏 URL。
+
+## 9. 后端 API
 
 ```text
-src/routes/(app)/workspace/agents/+page.svelte
-src/routes/(app)/workspace/agents/[id]/+page.svelte
-src/routes/(app)/workspace/agents/settings/+page.svelte
+GET    /api/v1/agentapi/config                 # 管理员
+POST   /api/v1/agentapi/config                 # 管理员
+POST   /api/v1/agentapi/config/verify          # 管理员
+GET    /api/v1/agentapi/profiles               # 当前用户可用 Agent
+
+POST   /api/v1/agentapi/chats                  # 创建 Agent Chat + 上游 Session
+GET    /api/v1/agentapi/chats/{chat_id}/status # 代理 Session 状态
+GET    /api/v1/agentapi/chats/{chat_id}/events?cursor=&limit=
+POST   /api/v1/agentapi/chats/{chat_id}/messages
+POST   /api/v1/agentapi/chats/{chat_id}/interrupt
+GET    /api/v1/agentapi/chats/{chat_id}/files
+GET    /api/v1/agentapi/chats/{chat_id}/files/{file_id}/content
+DELETE /api/v1/chats/{chat_id}                 # 先删上游 Session，再删本地索引
 ```
 
-复用 Workspace 的表格、用户/群组选择器、AccessGrant UI 和现有 Chat 管理页面的筛选模式。管理端提供 Provider 配置、Agent CRUD、版本/环境/Skill 引用、启停、访问授权、会话审计查看和文件查看；API Key 只提供掩码状态和重新配置，不提供读取接口。
+事件接口返回上游分页游标，不要求 Open WebUI 生成新的本地 sequence。所有路由先通过本地 Chat ID 进行身份和权限判断，再调用适配层。
 
-## 11. 生命周期规则
+## 10. 前端设计
 
-### 11.1 Agent 配置
+建议保持独立入口：
 
-- 禁用 Agent：禁止新建会话；已有会话默认允许继续，便于完成已开始的任务。管理员可提供“同时停止已有会话”的显式操作。
-- 修改 Version/Environment/Skill：只影响新会话；历史会话继续使用快照。
-- 删除 Agent 定义：采用软删除。存在活动会话时只隐藏新建入口，保留历史会话的显示名称和快照。
+```text
+src/routes/(app)/agent/+page.svelte
+src/routes/(app)/a/[id]/+page.svelte
+src/lib/components/agent/AgentChat.svelte
+src/lib/apis/agentapi/index.ts
+```
 
-### 11.2 会话和上游 Session
+Agent 页面维护内存中的事件列表，不写 Chat 消息接口。页面进入时：
 
-- 创建本地会话必须绑定上游 Session。
-- 删除进入 `deleting`，先拒绝新 run，再尝试取消活动 run 和删除上游 Session。
-- 上游删除成功或确认不可恢复后标记本地 `deleted`；上游接口暂时不可用时保留 `deleting`，由 Scheduler 重试。
-- 本地历史事件和审计默认软删除/保留策略由组织合规要求决定。Session 删除后，文件是否还能访问由七牛 Session/FileAPI 的删除和保留语义决定，不能在 Open WebUI 本地伪造文件副本状态。
+```text
+读取本地 Agent Chat 元数据
+    -> 查询 Session 状态
+    -> 按游标分页读取 Session 事件
+    -> 查询 Session FileAPI 文件列表
+    -> 开始短轮询
+```
 
-### 11.3 文件
+每条 `agent.message` 独立展示；思考、进度、工具调用、工具结果、状态和错误按事件类型展示或折叠。前端以 Session 终态为准，不能在终态后继续显示“Agent is working”。
 
-文件不在 Open WebUI 本地落盘，不执行对象存储上传和本地文件清理。删除会话时按七牛 Session API 的生命周期规则删除或关闭上游 Session；之后文件由七牛侧负责清理。Open WebUI 只保留事件中的脱敏文件元数据，并在文件访问时重新验证上游文件是否仍存在。
+文件下载可以通过后端代理接口触发浏览器下载。大文件不在前端转成完整 Blob，优先使用浏览器下载流或后端支持 Range 的方式。
 
-## 12. 异常、重试和取消
+## 11. 会话生命周期
+
+### 创建
+
+先创建上游 Session，成功后创建本地 Chat 绑定。任一步失败都要回滚另一侧。
+
+### Agent 配置变更
+
+新会话使用最新 Agent Version/Environment；本地 Chat 的 `meta.agentapi` 保存旧会话快照，历史会话继续指向原 Session，不受后续配置修改影响。
+
+### 禁用 Agent
+
+禁用只阻止新会话。已有会话默认可以继续查询、发送和下载，直到上游 Session 结束或被删除。
+
+### 删除
+
+1. 校验本地 Chat 删除权限。
+2. 调用上游 Session 删除接口。
+3. 上游返回成功或 404 后删除本地 Chat 索引。
+4. 上游失败时保留本地索引并返回可重试错误，不能静默删除本地绑定。
+
+Session 文件随上游 Session 生命周期处理，Open WebUI 不执行本地文件清理。
+
+## 12. 异常和重试
 
 | 场景 | 处理 |
 | --- | --- |
-| 连接超时/临时 5xx | 指数退避有限重试，携带原 request_id；超过上限标记 failed/unknown |
-| 429 限流 | 读取 Retry-After，更新 `next_retry_at`，不立即忙等 |
-| 鉴权失败 | 不重试，暂停相关 run，管理员收到配置错误提示 |
-| 上游事件重复 | 唯一约束去重，继续消费 |
-| 上游事件乱序 | 保存原始事件，使用 sequence 排序；协议不支持时分配本地序号 |
-| Worker 崩溃 | 租约过期后恢复或标记 unknown，避免重复提交 |
-| 浏览器断开 | Worker 继续运行，结果写库 |
-| 用户重试 | 新建 run，保留原 run 和事件；除非客户端 request_id 相同，否则不覆盖历史 |
-| 用户取消 | 写 cancel requested，调用上游取消；取消失败显示“取消处理中/结果未知” |
-| 文件下载失败 | 返回上游错误并保留文件元数据，可单独重试 FileAPI 下载，不重跑整个 Agent run |
+| AgentAPI 暂时不可用 | 返回明确的上游不可用状态；查询和文件请求可按 Retry-After 退避 |
+| 消息提交超时 | 只有在有幂等 request ID 时自动重试；否则标记“结果未知”，禁止盲目重新提交 |
+| 事件分页中断 | 保留前端最后游标，恢复后从该游标继续查询 |
+| Session 已过期/被删除 | 本地会话显示已结束，禁止继续发送 |
+| 文件已过期 | 返回 `SESSION_FILE_EXPIRED`，不伪造本地文件仍可用 |
+| 浏览器断开 | 停止轮询，不取消上游任务 |
+| Open WebUI 重启 | 无需恢复本地任务；重新查询上游 Session 状态和事件分页 |
+| 删除上游失败 | 保留本地绑定，管理员或用户可重试删除 |
 
-重试必须区分“提交消息失败”和“已提交后读取流失败”。已拿到上游 run ID 后不能盲目再次提交消息，优先调用上游恢复/查询接口，避免重复执行。
+## 13. 数据迁移和兼容
 
-## 13. 数据迁移与兼容
-
-1. 新增 Alembic migration 创建 Agent 表、索引和约束，不修改现有 `chat`、`chat_message` 的含义。
-2. 新增配置默认值 `agent.enabled=false`，未配置七牛服务时现有 Chat 完全不受影响。
-3. 不迁移历史 Chat 为 Agent；Agent 只接受新建会话。
-4. 如果复用 `access_grant`，补充资源类型白名单和查询索引；旧 grant 数据保持兼容。
-5. Agent 文件不写入现有 `file` 表，不增加本地文件副本；只保存 Session FileAPI 返回的必要展示元数据和事件记录。
-6. 灰度启用时按管理员、组织或用户白名单开启 Agent UI；关闭 Feature Flag 时保留已持久化事件和会话清理能力。
-7. 数据库升级、回滚和 Worker 版本发布必须分两步：先发布兼容 schema，再发布使用新字段的代码。
+1. 增加 `chat.mode`，默认值为 `chat`，现有 Chat 数据全部保持不变。
+2. 增加 `user_id + mode + updated_at` 索引，支持 Agent 列表筛选。
+3. 不创建 Agent 消息、事件、run、artifact 数据表。
+4. Agent Chat 的 `chat_message` 双写和普通 Chat 编辑接口必须禁止。
+5. 导入、clone、fork、share 等入口必须拒绝 Agent 会话，避免模式转换或泄露上游 Session。
+6. 现有 Docker 单实例继续使用 `/app/backend/data/webui.db`；不增加 Redis、对象存储或新的容器依赖。
 
 ## 14. 测试计划
 
-### 14.1 单元测试
+### 14.1 AgentAPI 契约测试
 
-- AgentAPI 适配层：鉴权、超时、SSE/WebSocket 解码、字段兼容和错误分类。
-- 事件归一化：每条 `agent.message` 独立保存，重复/乱序/缺序号处理正确。
-- 状态机：queued -> running -> terminal，非法状态迁移被拒绝。
-- 权限：用户/群组 grant、owner、管理员开关、禁用 Agent、已删除会话。
-- 文件安全：错误 file ID、跨 Session ID、上游过期文件、管理员范围。
-- 脱敏：API Key、Authorization、Cookie 不出现在响应和日志。
+- 创建、查询和删除 Session。
+- 同一 Session 连续提交多条消息。
+- 事件分页游标、重复事件、终态和服务端重启后的继续查询。
+- Session FileAPI 列表、Session 归属校验、流式读取和文件过期。
+- request ID 幂等和重复提交语义。
 
-### 14.2 集成测试
+### 14.2 权限测试
 
-- 创建会话、持续复用同一上游 Session、多个 run 的数据隔离。
-- Worker 重启、租约接管、重复事件、断线后补齐。
-- AgentAPI 超时、429、5xx、鉴权失败、取消和上游删除失败。
-- Session FileAPI 文件列举、流式下载、预览、上游文件过期和会话删除。
-- PostgreSQL 和 SQLite migration；Redis 开启/关闭两种模式。
+- 未授权用户看不到 Agent。
+- `read` 用户不能创建或发送。
+- `write` 用户只能使用被授权 Agent。
+- 普通用户不能用别人的本地 Chat ID 读取事件或文件。
+- 管理员只能按现有 Chat 管理范围查看员工记录。
+- 伪造上游 Session ID、file ID 和文件路径均不能越权。
 
-### 14.3 端到端和验收测试
+### 14.3 生命周期测试
 
-- Chat/Agent 入口、URL、会话列表互不混淆，不能相互切换。
-- 普通员工只能看到授权 Agent 和自己的会话。
-- 管理员按 Chat 当前范围查看员工 Agent 会话和文件，并产生审计记录。
-- 刷新、重新登录、浏览器断网、Web 重启后消息、状态和文件仍完整。
-- 负载测试长输出、多事件、多文件和并发会话；验证事件分页、数据库索引和 Session FileAPI 流式下载。
+- 刷新、重新登录、浏览器断网和 Web 重启后能从上游恢复。
+- Agent 禁用不影响已有会话规则。
+- 删除上游失败时本地绑定保留，成功后本地删除。
+- Chat 通用编辑、删除消息、clone、fork、share 不能操作 Agent 会话。
 
-## 15. 分阶段实施计划
+## 15. 分阶段实施
 
-### 阶段 0：协议和边界确认
+### 阶段 1：轻量后端代理
 
-拿到七牛 AgentAPI 文档和测试环境，确认 Session、run、事件流、文件、鉴权、取消、幂等和限流语义；产出适配层契约和错误码表。
+增加 `chat.mode`、Agent 配置、profile grant、Session 创建、事件分页、状态查询和 Session FileAPI 代理。
 
-### 阶段 1：数据与适配层
+### 阶段 2：Agent 前端
 
-完成 Alembic 表、权限查询服务、Provider 加密配置、AgentAPI client/adapter、脱敏日志和健康检查。此阶段不开放用户 UI。
+增加 Agent 独立入口、会话列表、事件分页渲染、状态轮询、文件列表和下载预览。
 
-### 阶段 2：最小可用会话
+### 阶段 3：边界和审计
 
-完成 Agent 列表、授权、创建会话、发送消息、事件持久化、事件查询和 Socket.IO 增量通知；支持单 Worker 和基本重试。
+补齐 Chat/Agent 通用接口隔离、管理员员工查看、审计事件、删除补偿和幂等请求处理。
 
-### 阶段 3：长任务与文件
+### 阶段 4：契约验证和灰度
 
-加入持久化 Worker、租约恢复、服务重启接管、取消/重试、Session FileAPI 文件列表、流式下载和预览。
+对接七牛沙箱，验证 Session 保留期限、事件分页游标、FileAPI 流式能力和消息幂等，再按用户/群组灰度启用。
 
-### 阶段 4：管理员能力和审计
+## 16. 关键风险
 
-复用 Chat 管理范围，完成员工会话查看、筛选、导出/共享/删除规则、文件审计、Agent 启停和版本/环境快照验证。
+该轻量方案把可靠性放在七牛 AgentAPI 上。以下任一条件不满足，就必须重新引入本地持久化：
 
-### 阶段 5：灰度和生产化
+- Session 事件不能在断线或重启后分页查询；
+- 文件不能通过 Session FileAPI 长期读取；
+- 消息提交没有幂等能力且允许重复执行；
+- Session 只能通过连接保持执行；
+- 管理审计要求保存一份与上游无关的本地内容快照。
 
-启用 PostgreSQL/Redis 部署，执行迁移演练、压测、安全测试和灰度 Feature Flag；确认 Session FileAPI 保留策略、监控指标和告警后扩大范围。
-
-## 16. 监控和运维指标
-
-- AgentAPI 请求成功率、P50/P95 延迟、429/5xx/鉴权失败数。
-- queued/running run 数、运行时长、重试次数、unknown 数和租约接管数。
-- 每个会话事件写入延迟、事件重复率、Socket 推送失败率。
-- Session FileAPI 文件列表/下载成功率、上游文件过期数、代理流中断数。
-- 权限拒绝、跨会话访问尝试、管理员查看/下载审计事件。
-
-日志使用 request_id、conversation_id、run_id、upstream_session_id（可脱敏）关联，禁止记录 API Key 和完整敏感 payload。生产环境应设置事件和原始 payload 的保留期限，并明确七牛 Session/FileAPI 的文件保留期限。
-
-## 17. 验收标准映射
-
-需求中的 1~5 由独立入口、Agent CRUD、`access_grant` 和启停控制覆盖；6~9 由 conversation 快照、run/event 持久化、Worker 租约和重连补齐覆盖；10~11 由 Session FileAPI 文件列表、会话归属校验和后端流式代理下载覆盖；12~13 由 Chat 管理范围复用和 owner 检查覆盖；14~15 由生命周期状态机、加密配置和脱敏审计覆盖；16 通过新增表、路由和 Feature Flag 保证现有 Chat 不改协议、不迁移数据。
-
-七牛 AgentAPI 文档补齐后，需把本方案第 4 节的适配接口映射为具体 endpoint/事件字段，并用官方沙箱跑通“创建 Session -> 多条 agent.message -> 文件列举/下载 -> 取消/删除”的契约测试，之后才进入阶段 1 的编码实现。
+在七牛 AgentAPI 满足这些条件时，单实例方案可以保持为“SQLite 本地权限索引 + AgentAPI Session 代理”，不需要本地消息库、任务 Worker、Redis 或对象存储。
