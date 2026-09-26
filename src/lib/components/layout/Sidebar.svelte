@@ -741,7 +741,7 @@
 			getAgentProfile(localStorage.token),
 			getAgentChats(localStorage.token, { limit: 1 }).catch(() => ({ items: [] }))
 		]);
-		agentAvailable = Boolean(agentProfile || agentChats.items?.length);
+		agentAvailable = $user?.role === 'admin' || Boolean(agentProfile || agentChats.items?.length);
 		await initSidebarData();
 		initPinnedMenuSortable();
 
