@@ -292,8 +292,8 @@ GET    /api/v1/agentapi/profiles               # 当前用户可用 Agent
 GET    /api/v1/agentapi/chats                  # 普通用户列出自己的；管理员列出所有用户的
 POST   /api/v1/agentapi/chats                  # 创建 Agent Chat + 上游 Session
 GET    /api/v1/agentapi/chats/{chat_id}/status # owner 或管理员只读
-GET    /api/v1/agentapi/chats/{chat_id}/events?cursor=&limit= # owner 或管理员只读
-POST   /api/v1/agentapi/chats/{chat_id}/messages  # 仅 owner
+GET    /api/v1/agentapi/chats/{chat_id}/events?cursor=&limit= # 读取完整事件历史；owner 或管理员只读
+POST   /api/v1/agentapi/chats/{chat_id}/messages  # 发送文本消息；仅 owner
 POST   /api/v1/agentapi/chats/{chat_id}/interrupt # 仅 owner
 GET    /api/v1/agentapi/chats/{chat_id}/files     # owner 或管理员只读
 GET    /api/v1/agentapi/chats/{chat_id}/files/{file_id}/content # owner 或管理员只读
