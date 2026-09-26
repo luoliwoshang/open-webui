@@ -110,14 +110,13 @@ async def _client() -> AgentAPIClient:
 
 
 async def _has_profile_read(user, profile_id: str, db: AsyncSession) -> bool:
-    """Check whether a user may discover and use an Agent profile.
+    """判断用户是否可以看到并使用指定的 Agent Profile。
 
-    Agent profiles reuse Open WebUI's generic access_grant table rather than
-    introducing an Agent-specific permission table. The resource is addressed
-    by resource_type='agent_profile' plus the local AgentProfile.id, and a
-    'read' grant means that the profile is both visible and usable. Existing
-    AccessGrants.has_access logic therefore covers direct user grants, group
-    membership, and the user:* wildcard. Administrators bypass profile grants.
+    Agent Profile 直接复用 Open WebUI 通用的 access_grant 表，不额外建立
+    Agent 专用权限表。资源由 resource_type='agent_profile' 和本地
+    AgentProfile.id 共同标识；read 权限同时表示“可见”和“可使用”。因此，
+    AccessGrants.has_access 原有逻辑可以直接处理用户授权、用户组授权以及
+    user:* 全体用户授权。管理员不受 Profile 授权限制，直接允许访问。
     """
     return user.role == 'admin' or await AccessGrants.has_access(
         user_id=user.id,
