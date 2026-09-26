@@ -129,7 +129,7 @@ agentapi.default_profile_id
 | `meta` | 可选扩展 JSON，只保存非敏感展示/能力元数据 |
 | `created_at`、`updated_at` | 审计和排序时间 |
 
-表中不保存 `agent_version`、API Key 或授权列表。API Key 属于连接级 Config；授权继续使用现有 `access_grant` 表，并设置 `resource_type='agent_profile'`、`resource_id=agent_profile.id`。Agent 配置授权沿用当前方案的 user/group grant 语义：`read` 表示可以看到 Agent，`write` 表示可以创建会话和发送消息。管理员配置权限继续使用现有 workspace/admin 权限。
+表中不保存 `agent_version`、API Key 或授权列表。API Key 属于连接级 Config；授权继续使用现有 `access_grant` 表，并设置 `resource_type='agent_profile'`、`resource_id=agent_profile.id`。权限语义与现有 Model 保持一致：`read` 表示 Agent 对员工可见且可以实际使用，`write` 只表示可以编辑或管理 profile，不代表可以发送消息。第一版 profile 配置仅开放给管理员，因此管理面板只需要产生用户、用户组或 `user:*` 的 `read` grants，不向普通员工授予或展示 `write`。管理员配置权限继续使用现有 workspace/admin 权限。
 
 `meta` 不能用来绕过正式字段，也不能写入 API Key、Agent Version 或 grants。以后增加多 Agent UI 时，可以直接列出多条 `agent_profile` 并切换 `default_profile_id`，不需要迁移已有 Session 或 Chat。
 
@@ -144,7 +144,7 @@ agentapi.default_profile_id
 5. Environment ID；
 6. 展示名称（可由验证结果预填，允许修改）；
 7. 描述（可选）；
-8. 可使用的用户/用户组授权；
+8. 可使用的用户/用户组授权（保存为 `read` grants，也可以授权 `user:*` 表示全体员工）；
 9. “验证连接”按钮。
 
 不提供 Agent Version 字段，不提供“是否使用最新版”开关，也不向普通用户提供 Agent 选择器。验证连接应同时校验 Key、Agent ID 和 Environment ID，并显示上游 Agent 名称及当前解析到的版本，但该版本仅是验证信息，不持久化到 profile。
@@ -197,7 +197,7 @@ delete_session(upstream_session_id)
 ### 6.1 创建会话
 
 1. 用户从独立 Agent 入口发起新会话，不选择 Agent，也不提交 profile ID。
-2. 后端读取 `agentapi.default_profile_id`，检查默认 profile 已启用、用户具有 Agent `write` 权限且 AgentAPI 全局启用。
+2. 后端读取 `agentapi.default_profile_id`，检查默认 profile 已启用、用户具有该 profile 的 `read` 权限且 AgentAPI 全局启用。
 3. 后端使用 profile 的 Agent ID 和 Environment ID 创建 Session，请求中明确省略 `agent.version`，让 AgentAPI 解析当时的最新版本。
 4. 上游返回 Session ID 和实际 `agent.version` 后，写入一条 `chat.mode='agent'` 的本地索引记录；`profile_id`、Agent ID、Environment ID 及响应中的实际 Version 都作为会话快照保存。
 5. 本地写入失败时，调用上游删除 Session，避免产生孤儿 Session。
@@ -217,7 +217,7 @@ delete_session(upstream_session_id)
 1. 第一版只提交文本；不显示输入文件选择器，也不调用 AgentAPI 文件上传或 Session resource 接口。
 2. 前端立即显示本地 pending 用户消息，不要求先写入 Open WebUI 数据库。
 3. 前端生成 `client_request_id`，调用 Agent 消息提交接口。
-4. 后端校验本地会话权限、Agent 会话状态和请求幂等键。
+4. 后端校验发送者是本地会话 owner、当前仍具有绑定 profile 的 `read` 权限，并检查 Agent 会话状态和请求幂等键。
 5. 后端将消息提交到同一个上游 Session，并尽量原样返回上游 ack。
 6. 前端立即执行一次事件增量同步，之后按 Session 状态继续轮询。
 7. 页面关闭后停止轮询，AgentAPI 继续执行；用户再次进入时从上游分页加载完整结果。
@@ -269,15 +269,18 @@ Open WebUI 不写本地文件、不写 `file` 表、不上传对象存储，也�
 
 ### 8.1 Agent 使用权限
 
-- Agent 列表使用 `read` grant。
-- 创建会话和发送消息使用 `write` grant。
-- Agent 禁用后禁止新建会话；已有会话是否继续由产品开关决定，默认允许继续查看和完成。
+- Agent profile 的 `read` grant 同时表示“可见”和“可使用”，与现有 Model 权限一致。它可以授予单个员工、用户组，或通过 `principal_type='user'`、`principal_id='*'` 授予全体员工。
+- 有 `read` 的员工可以看到默认 Agent 入口、创建自己的 Session，并在自己的 Session 中发送消息；相关前端入口和每一个写 API 都必须由后端重复校验，不能只依赖 UI 隐藏。
+- 没有 `read` 的员工看不到默认 Agent 入口，`GET /agentapi/profile` 不返回可用 profile，直接调用创建或发送接口也返回 `403`。
+- `write` 只用于编辑 profile、授权和管理配置，不是 Agent 对话权限。第一版这些配置操作仅限管理员，普通员工不需要 `write` grant。
+- Agent 全局禁用或 profile 禁用后禁止新建会话；已有会话默认可以继续查询和完成。profile 授权被撤销时采用下面的独立撤权规则。
 
 ### 8.2 会话权限
 
 - 普通用户只能访问自己 `user_id` 对应的 Agent Chat。
 - 管理员可以列出并读取所有用户的 Agent Chat，不受 owner、Agent profile grant 或 `ENABLE_ADMIN_CHAT_ACCESS` 限制；只读范围包括本地会话元数据、上游 Session 状态、完整事件、输出文件、`usage` 和 `stats`。
-- 管理员查看他人会话时是全局只读审计角色，不能代替 owner 发送消息或调用 interrupt；即使管理员拥有对应 Agent profile 的 `write` grant，也不能绕过该限制。管理员访问自己创建的 Agent Chat 时仍按 owner 权限处理。
+- 管理员查看他人会话时是全局只读审计角色，不能代替 owner 发送消息或调用 interrupt；即使管理员拥有对应 Agent profile 的管理权限，也不能绕过该限制。管理员访问自己创建的 Agent Chat 时仍按 owner 权限处理。
+- profile `read` 被撤销后，owner 仍可只读访问自己已有会话的状态、事件、文件和用量，但不能创建新会话或继续发送消息。若已有任务仍在运行，owner 仍可调用 interrupt，以免撤权后无法停止任务；interrupt 不授予任何新的发送能力。
 - 管理员对他人会话的归档、删除或其他修改不由全局只读权限自动放行；如后续需要运维处置，应增加独立权限和明确的管理入口。
 - 任何 Agent 事件、状态和文件路由都必须通过本地 Chat ID 查找绑定，不接受客户端直接指定上游 Session ID。
 - 文件权限以“本地 Chat 可读 + FileAPI 文件属于该 Session”为双重条件。
@@ -316,11 +319,11 @@ POST   /api/v1/agentapi/config/verify          # 管理员
 GET    /api/v1/agentapi/profile                # 当前用户可用的单个默认 Agent；不返回 Key 或 Version 配置
 
 GET    /api/v1/agentapi/chats                  # 普通用户列出自己的；管理员列出所有用户的
-POST   /api/v1/agentapi/chats                  # 创建 Agent Chat + 上游 Session
+POST   /api/v1/agentapi/chats                  # 创建 Agent Chat + 上游 Session；需要默认 profile read
 GET    /api/v1/agentapi/chats/{chat_id}/status # owner 或管理员只读
 GET    /api/v1/agentapi/chats/{chat_id}/events?cursor=&limit= # 读取完整事件历史；owner 或管理员只读
-POST   /api/v1/agentapi/chats/{chat_id}/messages  # 发送文本消息；仅 owner
-POST   /api/v1/agentapi/chats/{chat_id}/interrupt # 仅 owner
+POST   /api/v1/agentapi/chats/{chat_id}/messages  # 发送文本消息；仅 owner + 当前 profile read
+POST   /api/v1/agentapi/chats/{chat_id}/interrupt # 仅 owner；撤销 profile read 后仍可停止在途任务
 GET    /api/v1/agentapi/chats/{chat_id}/files     # owner 或管理员只读
 GET    /api/v1/agentapi/chats/{chat_id}/files/{file_id}/content # owner 或管理员只读
 POST   /api/v1/chats/{chat_id}/archive          # 仅 owner；只切换本地 archived
@@ -345,6 +348,7 @@ src/lib/apis/agentapi/index.ts
 ### 10.1 入口与信息架构
 
 - 普通用户侧在主导航中提供独立的“Agent”入口，进入 `/agent` 查看自己的 Agent 会话；Agent 会话使用 `/a/{chat_id}`，不与普通 Chat 的 `/c/{chat_id}` 和会话列表混排。
+- 当前用户没有默认 profile 的 `read` 权限时，不显示创建 Agent 会话的入口；已有历史会话仍可从个人 Agent 会话列表进入，但页面为只读且不显示消息输入框。
 - 管理员侧复用现有 `/admin/users` 人员管理入口。在用户操作菜单现有 Chat 对话入口旁增加独立的“Agent 对话”入口，或在 `src/lib/components/admin/Users/UserList/UserChatsModal.svelte` 中提供“Chat / Agent”两个明确的 Tab。
 - 管理员从人员菜单进入 Agent 对话列表时，只查询所选用户的 `mode='agent'` 会话；列表至少显示标题、Agent profile、Session 状态、创建/更新时间和用量摘要。
 - 点击会话后复用 `AgentChat.svelte`，由后端鉴权结果决定只读状态，不通过前端查询参数声明管理员权限。查看他人会话时显示明确的“管理员只读”标识，展示完整事件、状态、输出文件、`usage` 和 `stats`，隐藏消息输入、发送、interrupt、归档、删除等修改操作。
@@ -381,6 +385,10 @@ Agent 页面维护内存中的事件列表，不写 Chat 消息接口。页面�
 ### 禁用 Agent
 
 禁用只阻止新会话。已有会话默认可以继续查询、发送和下载，直到上游 Session 结束或被删除。
+
+### 撤销员工的 Agent 授权
+
+删除员工的直接 `read` grant，或将其移出拥有 `read` grant 的用户组后，立即禁止该员工创建新 Session 和向已有 Session 发送新消息。已有会话仍属于原 owner，可以继续只读查看历史、状态、输出文件和用量；正在运行的任务仍允许 owner interrupt。这样既能即时停止新的 Agent 调用，又不会让员工失去自己已经产生的历史记录，也不会制造无法停止的后台任务。
 
 ### 归档和取消归档
 
@@ -436,9 +444,10 @@ Session 文件随上游 Session 生命周期处理，Open WebUI 不执行本地�
 
 ### 14.2 权限测试
 
-- 未授权用户看不到 Agent。
-- `read` 用户不能创建或发送。
-- `write` 用户只能使用被授权 Agent。
+- 未授权用户看不到默认 Agent，也不能绕过前端直接创建 Session 或发送消息。
+- 获得直接用户、用户组或 `user:*` 的 `read` grant 后，员工可以看到并使用默认 Agent；`read` 是创建和发送所需的运行时权限。
+- `write` 只允许管理 profile，不隐式授予对话使用权限；第一版普通员工不获得 `write`。
+- 撤销 `read` 后，员工不能创建或发送，但仍能只读查看自己的已有会话并 interrupt 自己仍在运行的任务。
 - 普通用户不能用别人的本地 Chat ID 读取事件或文件。
 - 管理员可以列出所有用户的 Agent Chat，并读取任意员工会话的状态、完整事件、输出文件、`usage` 和 `stats`。
 - 管理员不能向他人的 Agent Chat 发送消息或调用 interrupt；管理员自己的 Agent Chat 仍按 owner 权限处理。
@@ -450,6 +459,7 @@ Session 文件随上游 Session 生命周期处理，Open WebUI 不执行本地�
 
 - 刷新、重新登录、浏览器断网和 Web 重启后能从上游恢复。
 - Agent 禁用不影响已有会话规则。
+- 员工的 profile `read` 被撤销后，已有会话可读但不可继续发送；仍在运行的本人任务可以 interrupt。
 - 归档和取消归档只改变本地 `chat.archived`；上游 Session 状态、事件和文件不受影响，取消归档后可以继续原会话。
 - 删除上游失败时本地绑定保留，成功后本地删除。
 - Chat 通用编辑、删除消息、clone、fork、share 不能操作 Agent 会话。
