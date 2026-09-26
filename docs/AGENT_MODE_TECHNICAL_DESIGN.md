@@ -13,9 +13,9 @@ Agent 与 Chat 是两种平级会话模式，但 Agent 的消息、状态和文�
 1. Agent 会话创建时确定模式，不能转换为 Chat；Chat 也不能转换为 Agent。
 2. 七牛 AgentAPI Session 是 Agent 消息、执行状态和文件的唯一事实源。
 3. Open WebUI 只保存本地 Chat 索引和上游 Session 绑定，不保存 Agent 消息内容。
-4. Agent 长任务由七牛侧持续执行；Open WebUI 不使用进程内后台任务，也不长期持有 SSE。
-5. 页面打开时使用事件分页轮询；页面关闭、浏览器断开或 Open WebUI 重启不影响上游 Session。
-6. Agent 文件只通过对应 Session 的 FileAPI 实时列举、预览和流式下载，不使用本地 FileAPI、`file` 表或对象存储。
+4. Agent 长任务由七牛侧持续执行；第一版使用前端事件轮询，不使用进程内后台任务、Socket.IO 补发或 SSE。
+5. 页面关闭时停止轮询；浏览器断开或 Open WebUI 重启不影响上游 Session，重新进入页面后从上游历史增量恢复。
+6. 第一版只支持文本输入，不提供输入文件上传或 Session resource 挂载；Agent 输出文件仍通过对应 Session 的 FileAPI 实时列举、预览和流式下载，不使用本地 FileAPI、`file` 表或对象存储。
 7. API Key 始终只存在于后端配置和后端到 AgentAPI 的请求中。
 8. Open WebUI 的归档只修改本地 `chat.archived`，不归档、中断或修改上游 AgentAPI Session；取消归档后仍可继续访问原 Session。
 
@@ -153,26 +153,17 @@ backend/open_webui/utils/agentapi.py
 verify_connection(config)
 create_session(agent_snapshot) -> upstream_session
 get_session(upstream_session_id) -> session_status
-submit_message(upstream_session_id, request_id, content, attachments) -> ack
-list_session_events(upstream_session_id, cursor, limit) -> event_page
+submit_message(upstream_session_id, request_id, content) -> ack
+list_session_events(upstream_session_id, page, limit, order, created_at_gte) -> raw_event_page
 list_session_files(upstream_session_id) -> file_page
 stream_session_file(upstream_session_id, file_id, range_header) -> byte_stream
 cancel_session_run(upstream_session_id, upstream_run_id)
 delete_session(upstream_session_id)
 ```
 
-适配层返回给前端的事件至少包含：
+适配层不把上游事件重塑为 Open WebUI Message。JSON 接口尽量原样返回 AgentAPI 的完整响应信封、事件字段和未知扩展字段，包括 `data`、`next_page`、事件 `id`、`type`、`sequence_number`、时间、内容和结构化 payload。Open WebUI 自己需要补充的信息放入独立的 `_open_webui` 命名空间；API Key、认证头和不安全的上游响应头不得透传。
 
-```text
-event_id
-event_type
-sequence/cursor
-content or structured payload
-created_at
-terminal_status
-```
-
-每个 `agent.message` 按上游事件边界返回，前端逐条渲染。Open WebUI 不把这些事件写入数据库。
+每个 `agent.message` 按上游事件边界返回，前端逐条渲染并以事件 `id` 做 upsert。Open WebUI 不把这些事件写入数据库。业务判断可使用 SDK typed object，代理响应使用 `with_raw_response` 保留原始 JSON 和未知字段。
 
 ## 6. 会话和消息流程
 
@@ -190,30 +181,35 @@ terminal_status
 2. 后端按 `chat_id` 查询本地 Chat 行并执行 owner/admin 权限检查。
 3. 后端从 `meta.agentapi.session_id` 读取上游 Session ID。
 4. 后端调用 AgentAPI Session 状态和事件分页接口。
-5. 返回事件页、`next_cursor`、Session 状态和本地会话元数据。
+5. 分别原样返回上游事件分页信封和 Session 状态；需要附加的本地会话元数据放在 `_open_webui` 下。
 
 刷新、重新登录和 Web 重启都重复上述流程，因此不依赖本地消息缓存。
 
 ### 6.3 发送消息
 
-1. 前端立即显示本地 pending 用户消息，不要求先写入 Open WebUI 数据库。
-2. 前端生成 `client_request_id`，调用 Agent 消息提交接口。
-3. 后端校验本地会话权限、Agent 会话状态和请求幂等键。
-4. 后端将消息提交到同一个上游 Session，并返回上游 ack/request ID。
-5. 页面打开期间轮询事件分页和 Session 状态；事件按游标追加到当前页面。
-6. 页面关闭后停止轮询，AgentAPI 继续执行；用户再次进入时从上游分页加载完整结果。
+1. 第一版只提交文本；不显示输入文件选择器，也不调用 AgentAPI 文件上传或 Session resource 接口。
+2. 前端立即显示本地 pending 用户消息，不要求先写入 Open WebUI 数据库。
+3. 前端生成 `client_request_id`，调用 Agent 消息提交接口。
+4. 后端校验本地会话权限、Agent 会话状态和请求幂等键。
+5. 后端将消息提交到同一个上游 Session，并尽量原样返回上游 ack。
+6. 前端立即执行一次事件增量同步，之后按 Session 状态继续轮询。
+7. 页面关闭后停止轮询，AgentAPI 继续执行；用户再次进入时从上游分页加载完整结果。
 
 ### 6.4 轮询策略
 
-- 提交后前 30 秒每 1~2 秒查询一次。
-- 任务持续执行时可退避到 3~5 秒。
-- Session 进入终态后停止轮询，并刷新一次文件列表。
-- 浏览器重新获得焦点或网络恢复时，使用最后一个游标补查。
-- 不使用 Open WebUI 常驻 SSE、Socket.IO 事件补发或进程内后台任务。
+- 首次进入页面时查询一次 Session 状态，并以 `order=asc` 分页读取全部历史；每页都原样跟随 `next_page`，直到其为 `null`。
+- 前端维护 `eventsById` 和最后一个事件的 `created_at` 时间水位。增量轮询使用上游 `created_at[gte]`（或 SDK 对应参数）保留时间边界重叠，对返回事件按 `id` 做 upsert，再按 `sequence_number` 排序，不能只用已经变为 `null` 的末页 `next_page` 作为下一轮游标。
+- 每一轮若返回 `next_page`，立即继续翻页直到读完，再安排下一次轮询；不能因为单页数量达到 `limit` 就等待下一个定时周期。
+- 消息提交成功后立即轮询一次；`running` 时每 1.5 秒轮询，`rescheduling` 时每 3 秒轮询。
+- 收到 `session.status_idle` 后再完成一次事件同步、查询一次 Session 取得最终 `usage`/`stats`，然后停止；`idle` 表示当前轮完成并等待下一条消息，不表示 Session 已终结。
+- 收到 `terminated` 或不可恢复的 `session.error` 后停止轮询并禁止继续发送。浏览器重新获得焦点或网络恢复时，立即执行一次“状态查询 + 增量事件同步”。
+- 使用一次请求完成后再启动下一次的 `setTimeout`，禁止使用可能产生重叠请求的 `setInterval`。页面离开时取消在途请求并清除定时器。
+- `429` 优先遵守 `Retry-After`；网络错误和可重试的 `5xx` 按 2、4、8、15、30 秒退避，成功后恢复正常频率。同一轮轮询始终只有一个在途请求。
+- 第一版不使用 Open WebUI 常驻 SSE、Socket.IO 事件补发或进程内后台任务；多个页面各自轮询，后台标签页可暂停或降低频率，重新获得焦点时立即补查。
 
 ## 7. 文件处理
 
-Agent 文件只属于对应 AgentAPI Session。
+第一版不支持输入文件上传、挂载或运行中增删 Session resource。文件能力仅用于读取 Agent 写入 `/mnt/session/outputs/` 后由 AgentAPI 收集的输出文件；这些文件只属于对应 AgentAPI Session。
 
 ### 7.1 文件列表
 
@@ -318,9 +314,10 @@ Agent 页面维护内存中的事件列表，不写 Chat 消息接口。页面�
 ```text
 读取本地 Agent Chat 元数据
     -> 查询 Session 状态
-    -> 按游标分页读取 Session 事件
+    -> 使用 next_page 分页读取完整历史
+    -> 使用 created_at 时间水位增量轮询并按事件 ID upsert
     -> 查询 Session FileAPI 文件列表
-    -> 开始短轮询
+    -> Session running 时开始短轮询
 ```
 
 每条 `agent.message` 独立展示；思考、进度、工具调用、工具结果、状态和错误按事件类型展示或折叠。前端以 Session 终态为准，不能在终态后继续显示“Agent is working”。
@@ -385,7 +382,9 @@ Session 文件随上游 Session 生命周期处理，Open WebUI 不执行本地�
 - 创建、查询和删除 Session。
 - 同一 Session 连续提交多条消息。
 - 事件分页游标、重复事件、终态和服务端重启后的继续查询。
+- 使用 `created_at[gte]` 重叠查询时不遗漏同时间戳事件，重复事件能按 ID 更新且轮询请求不重叠。
 - Session FileAPI 列表、Session 归属校验、流式读取和文件过期。
+- 第一版消息接口只接受文本，不暴露输入文件上传和 Session resource 挂载入口。
 - request ID 幂等和重复提交语义。
 
 ### 14.2 权限测试
