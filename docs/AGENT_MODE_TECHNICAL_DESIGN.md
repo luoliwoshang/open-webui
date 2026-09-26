@@ -17,6 +17,7 @@ Agent 与 Chat 是两种平级会话模式，但 Agent 的消息、状态和文�
 5. 页面打开时使用事件分页轮询；页面关闭、浏览器断开或 Open WebUI 重启不影响上游 Session。
 6. Agent 文件只通过对应 Session 的 FileAPI 实时列举、预览和流式下载，不使用本地 FileAPI、`file` 表或对象存储。
 7. API Key 始终只存在于后端配置和后端到 AgentAPI 的请求中。
+8. Open WebUI 的归档只修改本地 `chat.archived`，不归档、中断或修改上游 AgentAPI Session；取消归档后仍可继续访问原 Session。
 
 目前已通过七牛 AgentAPI 测试接口确认：
 
@@ -82,7 +83,7 @@ Agent 不需要单独 Worker、Redis、S3 或本地文件目录。七牛 AgentAP
 | `user_id` | 会话 owner |
 | `mode` | 固定为 `agent` |
 | `title` | 本地显示标题 |
-| `archived`、`pinned`、`folder_id` | 复用现有会话管理能力 |
+| `archived`、`pinned`、`folder_id` | 复用现有会话管理能力；`archived` 仅表示 Open WebUI 本地隐藏状态 |
 | `created_at`、`updated_at` | 本地列表排序和未读提示 |
 | `meta.agentapi.profile_id` | 创建时使用的 Agent 配置 ID |
 | `meta.agentapi.profile_name` | 创建时的 Agent 名称快照 |
@@ -267,7 +268,9 @@ Open WebUI 不写本地文件、不写 `file` 表、不上传对象存储，也�
 
 以下管理操作可以复用现有 Chat 能力，但仍须保留 `mode=agent`：
 
-- 标题、归档、置顶、文件夹、删除；
+- 标题、置顶、文件夹；
+- 归档和取消归档只更新本地 `chat.archived`，不得调用 AgentAPI 的归档、中断或删除接口；
+- 删除仍按 Agent 会话删除流程先删除上游 Session，再删除本地索引；
 - 管理员按现有范围查看；
 - 审计记录和必要的内容导出。
 
@@ -293,6 +296,7 @@ POST   /api/v1/agentapi/chats/{chat_id}/messages
 POST   /api/v1/agentapi/chats/{chat_id}/interrupt
 GET    /api/v1/agentapi/chats/{chat_id}/files
 GET    /api/v1/agentapi/chats/{chat_id}/files/{file_id}/content
+POST   /api/v1/chats/{chat_id}/archive          # 仅切换本地 archived，不调用上游
 DELETE /api/v1/chats/{chat_id}                 # 先删上游 Session，再删本地索引
 ```
 
@@ -336,6 +340,12 @@ Agent 页面维护内存中的事件列表，不写 Chat 消息接口。页面�
 ### 禁用 Agent
 
 禁用只阻止新会话。已有会话默认可以继续查询、发送和下载，直到上游 Session 结束或被删除。
+
+### 归档和取消归档
+
+Open WebUI 归档是纯本地的会话列表管理行为，只切换本地 `chat.archived`。归档和取消归档均不得调用 AgentAPI 的 Session archive、interrupt 或 delete 接口，也不得改变上游 Session 状态。归档期间上游长任务可以继续执行；用户取消归档后，仍通过原有 `chat_id -> session_id` 绑定读取事件、文件并继续会话。
+
+AgentAPI 的 Session archive 具有禁止继续发送事件等不同语义，不映射到 Open WebUI 的可恢复归档操作。若未来产品需要“结束但保留上游历史”，应新增名称和确认流程均明确的独立操作，不能复用 Open WebUI 归档入口。
 
 ### 删除
 
@@ -391,6 +401,7 @@ Session 文件随上游 Session 生命周期处理，Open WebUI 不执行本地�
 
 - 刷新、重新登录、浏览器断网和 Web 重启后能从上游恢复。
 - Agent 禁用不影响已有会话规则。
+- 归档和取消归档只改变本地 `chat.archived`；上游 Session 状态、事件和文件不受影响，取消归档后可以继续原会话。
 - 删除上游失败时本地绑定保留，成功后本地删除。
 - Chat 通用编辑、删除消息、clone、fork、share 不能操作 Agent 会话。
 

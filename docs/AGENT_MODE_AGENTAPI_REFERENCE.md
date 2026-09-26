@@ -459,6 +459,12 @@ DELETE /v1/sessions/{session_id}
 
 Open WebUI 删除 Agent 会话时先调用上游删除。上游删除成功后再删除本地 `chat` 索引；上游失败则保留本地绑定并允许重试。Session 文件随上游 Session 生命周期处理。
 
+### Open WebUI 归档不映射到上游归档
+
+Open WebUI 的归档和取消归档只切换本地 `chat.archived`，用于控制会话是否出现在默认列表中，不调用 AgentAPI 的 Session archive、interrupt 或 delete 接口。上游 Session 在本地归档期间保持原状态，长任务可继续执行；取消归档后继续使用原 Session。
+
+AgentAPI 的 Session archive 会改变上游会话生命周期并禁止继续发送事件，与 Open WebUI 可恢复的列表归档语义不同，因此不纳入当前适配器映射。若未来需要该能力，应作为独立的“结束 Session”操作设计，不能复用 Open WebUI 归档入口。
+
 ## 11. 尚未纳入第一版契约的能力
 
 以下能力不是当前轻量方案的必需依赖，不能在未验证前作为实现前提：
