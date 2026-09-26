@@ -314,6 +314,17 @@ src/lib/components/agent/AgentChat.svelte
 src/lib/apis/agentapi/index.ts
 ```
 
+### 10.1 入口与信息架构
+
+- 普通用户侧在主导航中提供独立的“Agent”入口，进入 `/agent` 查看自己的 Agent 会话；Agent 会话使用 `/a/{chat_id}`，不与普通 Chat 的 `/c/{chat_id}` 和会话列表混排。
+- 管理员侧复用现有 `/admin/users` 人员管理入口。在用户操作菜单现有 Chat 对话入口旁增加独立的“Agent 对话”入口，或在 `src/lib/components/admin/Users/UserList/UserChatsModal.svelte` 中提供“Chat / Agent”两个明确的 Tab。
+- 管理员从人员菜单进入 Agent 对话列表时，只查询所选用户的 `mode='agent'` 会话；列表至少显示标题、Agent profile、Session 状态、创建/更新时间和用量摘要。
+- 点击会话后复用 `AgentChat.svelte`，由后端鉴权结果决定只读状态，不通过前端查询参数声明管理员权限。查看他人会话时显示明确的“管理员只读”标识，展示完整事件、状态、输出文件、`usage` 和 `stats`，隐藏消息输入、发送、interrupt、归档、删除等修改操作。
+- 隐藏控件只用于产品表达，后端仍必须拒绝管理员对他人会话调用消息、interrupt 或其他修改接口；不能把前端只读状态当作权限校验。
+- 如果普通 Chat 路由收到 `mode='agent'` 的本地 Chat ID，应跳转到 `/a/{chat_id}` 或拒绝加载；Agent 详情页收到普通 Chat ID 时同样拒绝，防止两套会话组件混用。
+
+### 10.2 Agent 会话页面
+
 Agent 页面维护内存中的事件列表，不写 Chat 消息接口。页面进入时：
 
 ```text
@@ -401,6 +412,7 @@ Session 文件随上游 Session 生命周期处理，Open WebUI 不执行本地�
 - 管理员可以列出所有用户的 Agent Chat，并读取任意员工会话的状态、完整事件、输出文件、`usage` 和 `stats`。
 - 管理员不能向他人的 Agent Chat 发送消息或调用 interrupt；管理员自己的 Agent Chat 仍按 owner 权限处理。
 - 管理员读取他人会话和下载输出文件会生成审计记录，审计内容不包含消息正文、API Key 或文件内容。
+- 管理员人员菜单将普通 Chat 与 Agent 对话分开展示；进入他人 Agent 会话时显示只读状态且不渲染任何修改控件，直接调用写接口仍返回拒绝访问。
 - 伪造上游 Session ID、file ID 和文件路径均不能越权。
 
 ### 14.3 生命周期测试
