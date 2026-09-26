@@ -743,7 +743,7 @@ class UsersTable:
 
         # Delete User Chats
         async with get_async_db_context(db) as session:
-            deleted_chats = await Chats.delete_chats_by_user_id(id, db=session)
+            deleted_chats = await Chats.delete_chats_by_user_id(id, db=session, mode=None)
             if not deleted_chats:
                 return False  # chats deletion failed
             await session.execute(delete(User).where(User.id == id))

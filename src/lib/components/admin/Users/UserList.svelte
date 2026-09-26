@@ -22,6 +22,7 @@
 
 	import EditUserModal from '$lib/components/admin/Users/UserList/EditUserModal.svelte';
 	import UserChatsModal from '$lib/components/admin/Users/UserList/UserChatsModal.svelte';
+	import UserAgentChatsModal from '$lib/components/admin/Users/UserList/UserAgentChatsModal.svelte';
 	import AddUserModal from '$lib/components/admin/Users/UserList/AddUserModal.svelte';
 
 	import ConfirmDialog from '$lib/components/common/ConfirmDialog.svelte';
@@ -34,6 +35,7 @@
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import ProfilePreview from '$lib/components/channel/Messages/Message/ProfilePreview.svelte';
 	import UserPreviewModal from '$lib/components/admin/UserPreviewModal.svelte';
+	import SparklesSolid from '$lib/components/icons/SparklesSolid.svelte';
 
 	const i18n = getContext('i18n');
 
@@ -53,6 +55,7 @@
 	let showAddUserModal = false;
 
 	let showUserChatsModal = false;
+	let showUserAgentChatsModal = false;
 	let showEditUserModal = false;
 	let showUserPreviewModal = false;
 
@@ -158,6 +161,7 @@
 
 {#if selectedUser}
 	<UserChatsModal bind:show={showUserChatsModal} user={selectedUser} />
+	<UserAgentChatsModal bind:show={showUserAgentChatsModal} user={selectedUser} />
 {/if}
 
 {#if ($config?.license_metadata?.seats ?? null) !== null && total && total > $config?.license_metadata?.seats}
@@ -412,6 +416,21 @@
 											}}
 										>
 											<ChatBubbles className="size-3.5" />
+										</button>
+									</Tooltip>
+								{/if}
+
+								{#if user.role !== 'admin'}
+									<Tooltip content={$i18n.t('Agent conversations')}>
+										<button
+											class="self-center w-fit p-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg"
+											aria-label={$i18n.t('Agent conversations')}
+											on:click={() => {
+												selectedUser = user;
+												showUserAgentChatsModal = true;
+											}}
+										>
+											<SparklesSolid className="size-3.5" />
 										</button>
 									</Tooltip>
 								{/if}

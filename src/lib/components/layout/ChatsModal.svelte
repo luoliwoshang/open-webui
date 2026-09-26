@@ -26,13 +26,14 @@
 	import LinkSlash from '../icons/LinkSlash.svelte';
 	import Clipboard from '../icons/Clipboard.svelte';
 
-	const i18n = getContext('i18n');
+	const i18n: any = getContext('i18n');
 
 	export let show = false;
 
 	export let title = 'Chats';
 	export let emptyPlaceholder = '';
 	export let shareUrl = false;
+	export let chatPathPrefix = '/c';
 	export let showUserInfo = false;
 	export let showSearch = true;
 	export let readOnly = false;
@@ -48,11 +49,11 @@
 		query = '';
 	}
 
-	export let chatList = null;
+	export let chatList: any[] | null = null;
 	export let allChatsLoaded = false;
 	export let chatListLoading = false;
 
-	let selectedChatId = null;
+	let selectedChatId: string | null = null;
 	let selectedIdx = 0;
 	let showDeleteConfirmDialog = false;
 
@@ -63,7 +64,7 @@
 	export let unarchiveHandler: null | Function = null;
 	export let unshareHandler: null | Function = null;
 
-	const setSortKey = (key) => {
+	const setSortKey = (key: string) => {
 		if (orderBy === key) {
 			direction = direction === 'asc' ? 'desc' : 'asc';
 		} else {
@@ -72,7 +73,7 @@
 		}
 	};
 
-	const deleteHandler = async (chatId) => {
+	const deleteHandler = async (chatId: string) => {
 		const res = await deleteChatById(localStorage.token, chatId).catch((error) => {
 			toast.error(`${error}`);
 		});
@@ -290,7 +291,7 @@
 									{/if}
 									<a
 										class={showUserInfo ? 'flex-1' : 'basis-3/5'}
-										href={shareUrl ? `/s/${chat.id}` : `/c/${chat.id}`}
+										href={shareUrl ? `/s/${chat.id}` : `${chatPathPrefix}/${chat.id}`}
 										on:click={() => (show = false)}
 									>
 										<div class="text-ellipsis line-clamp-1 w-full">
@@ -355,7 +356,7 @@
 																toast.success($i18n.t('Share link copied to clipboard.'));
 															}}
 														>
-															<Clipboard class="size-4" strokeWidth="1.5" />
+															<Clipboard className="size-4" strokeWidth="1.5" />
 														</button>
 													</Tooltip>
 												{/if}
@@ -458,7 +459,7 @@
 														'border-b'} border-gray-50 dark:border-gray-850/30 text-xs"
 												>
 													<td class="px-3 py-1 w-2/3">
-														<a href="/c/{chat.id}" target="_blank">
+												<a href="{chatPathPrefix}/{chat.id}" target="_blank">
 															<div class=" hover:underline line-clamp-1">
 																{chat.title}
 															</div>

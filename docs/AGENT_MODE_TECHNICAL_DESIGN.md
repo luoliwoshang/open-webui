@@ -35,19 +35,19 @@ Session 和 FileAPI 按长期保留前提使用。正式接入前仍需确认消
 
 ## 2. 现有代码复用范围
 
-| 现有能力 | Agent 使用方式 |
-| --- | --- |
-| `backend/open_webui/main.py` | 挂载 Agent 路由 |
-| `models/chats.py` 的 `chat` 表 | 保存 Agent 本地索引、owner、标题、归档、文件夹和上游 Session 绑定 |
-| `Chat.mode` | 区分 `chat` 与 `agent` |
-| `models/config.py` 的 Config | 保存 AgentAPI 地址、启用状态、API Key 和默认 profile ID |
-| 新增 `agent_profile` 表 | 保存可扩展的 Agent/Environment 配置；第一版只展示并启用一个默认 profile |
-| `access_grant`、Groups | 控制 Agent 查看/使用权限 |
-| `ENABLE_ADMIN_CHAT_ACCESS` | 不限制 Agent 会话；Agent 模式明确允许管理员全局只读所有用户会话 |
-| `AuditLoggingMiddleware` | 记录配置、查看、文件下载、删除和管理行为 |
-| `models/files.py`、`routers/files.py` | 不用于 Agent 文件内容；只借鉴现有预览和鉴权交互 |
-| Socket.IO | Agent v1 不依赖；实时性由事件分页轮询实现 |
-| SQLite | 单实例默认数据库，保存本地索引和权限数据 |
+| 现有能力                              | Agent 使用方式                                                          |
+| ------------------------------------- | ----------------------------------------------------------------------- |
+| `backend/open_webui/main.py`          | 挂载 Agent 路由                                                         |
+| `models/chats.py` 的 `chat` 表        | 保存 Agent 本地索引、owner、标题、归档、文件夹和上游 Session 绑定       |
+| `Chat.mode`                           | 区分 `chat` 与 `agent`                                                  |
+| `models/config.py` 的 Config          | 保存 AgentAPI 地址、启用状态、API Key 和默认 profile ID                 |
+| 新增 `agent_profile` 表               | 保存可扩展的 Agent/Environment 配置；第一版只展示并启用一个默认 profile |
+| `access_grant`、Groups                | 控制 Agent 查看/使用权限                                                |
+| `ENABLE_ADMIN_CHAT_ACCESS`            | 不限制 Agent 会话；Agent 模式明确允许管理员全局只读所有用户会话         |
+| `AuditLoggingMiddleware`              | 记录配置、查看、文件下载、删除和管理行为                                |
+| `models/files.py`、`routers/files.py` | 不用于 Agent 文件内容；只借鉴现有预览和鉴权交互                         |
+| Socket.IO                             | Agent v1 不依赖；实时性由事件分页轮询实现                               |
+| SQLite                                | 单实例默认数据库，保存本地索引和权限数据                                |
 
 ## 3. 系统架构
 
@@ -81,20 +81,20 @@ Agent 不需要单独 Worker、Redis、S3 或本地文件目录。七牛 AgentAP
 
 创建 Agent 会话时，新增一条 `chat` 记录：
 
-| 字段 | 用途 |
-| --- | --- |
-| `id` | Open WebUI 本地会话 ID，前端只使用此 ID |
-| `user_id` | 会话 owner |
-| `mode` | 固定为 `agent` |
-| `title` | 本地显示标题 |
+| 字段                              | 用途                                                            |
+| --------------------------------- | --------------------------------------------------------------- |
+| `id`                              | Open WebUI 本地会话 ID，前端只使用此 ID                         |
+| `user_id`                         | 会话 owner                                                      |
+| `mode`                            | 固定为 `agent`                                                  |
+| `title`                           | 本地显示标题                                                    |
 | `archived`、`pinned`、`folder_id` | 复用现有会话管理能力；`archived` 仅表示 Open WebUI 本地隐藏状态 |
-| `created_at`、`updated_at` | 本地列表排序和未读提示 |
-| `meta.agentapi.profile_id` | 创建时使用的 Agent 配置 ID |
-| `meta.agentapi.profile_name` | 创建时的 Agent 名称快照 |
-| `meta.agentapi.session_id` | 七牛 AgentAPI Session ID |
-| `meta.agentapi.agent_id` | 创建时 Agent ID 快照 |
-| `meta.agentapi.agent_version` | 创建时 Version 快照 |
-| `meta.agentapi.environment_id` | 创建时 Environment 快照 |
+| `created_at`、`updated_at`        | 本地列表排序和未读提示                                          |
+| `meta.agentapi.profile_id`        | 创建时使用的 Agent 配置 ID                                      |
+| `meta.agentapi.profile_name`      | 创建时的 Agent 名称快照                                         |
+| `meta.agentapi.session_id`        | 七牛 AgentAPI Session ID                                        |
+| `meta.agentapi.agent_id`          | 创建时 Agent ID 快照                                            |
+| `meta.agentapi.agent_version`     | 创建时 Version 快照                                             |
+| `meta.agentapi.environment_id`    | 创建时 Environment 快照                                         |
 
 `chat.chat` 只保留最小结构，不写入 Agent 消息和事件；Agent 不双写到 `chat_message`。本地 Chat 行存在的目的是提供 owner、管理员范围、列表、归档、删除和审计关联。
 
@@ -117,17 +117,17 @@ agentapi.default_profile_id
 
 虽然第一版管理面板只展示一条默认 Agent 配置，数据库仍使用一张独立表，而不是把 profiles 数组塞入 Config JSON：
 
-| 字段 | 用途 |
-| --- | --- |
-| `id` | Open WebUI 内部 profile ID |
-| `name` | UI 展示名称；验证连接后可用上游 Agent 名称预填 |
-| `description` | 可选的产品说明 |
-| `agent_id` | 七牛 Agent ID，必填 |
-| `environment_id` | 七牛 Environment ID，必填 |
-| `enabled` | 是否允许用该 profile 新建 Session |
-| `created_by` | 创建或首次配置的管理员 ID，用于审计 |
-| `meta` | 可选扩展 JSON，只保存非敏感展示/能力元数据 |
-| `created_at`、`updated_at` | 审计和排序时间 |
+| 字段                       | 用途                                           |
+| -------------------------- | ---------------------------------------------- |
+| `id`                       | Open WebUI 内部 profile ID                     |
+| `name`                     | UI 展示名称；验证连接后可用上游 Agent 名称预填 |
+| `description`              | 可选的产品说明                                 |
+| `agent_id`                 | 七牛 Agent ID，必填                            |
+| `environment_id`           | 七牛 Environment ID，必填                      |
+| `enabled`                  | 是否允许用该 profile 新建 Session              |
+| `created_by`               | 创建或首次配置的管理员 ID，用于审计            |
+| `meta`                     | 可选扩展 JSON，只保存非敏感展示/能力元数据     |
+| `created_at`、`updated_at` | 审计和排序时间                                 |
 
 表中不保存 `agent_version`、API Key 或授权列表。API Key 属于连接级 Config；授权继续使用现有 `access_grant` 表，并设置 `resource_type='agent_profile'`、`resource_id=agent_profile.id`。权限语义与现有 Model 保持一致：`read` 表示 Agent 对员工可见且可以实际使用，`write` 只表示可以编辑或管理 profile，不代表可以发送消息。第一版 profile 配置仅开放给管理员，因此管理面板只需要产生用户、用户组或 `user:*` 的 `read` grants，不向普通员工授予或展示 `write`。管理员配置权限继续使用现有 workspace/admin 权限。
 
@@ -155,12 +155,12 @@ agentapi.default_profile_id
 
 如果七牛不提供幂等能力，只增加一张很小的 `agent_request_dedupe` 表：
 
-| 字段 | 用途 |
-| --- | --- |
-| `session_id` | 本地 Chat ID 或上游 Session ID |
-| `client_request_id` | 客户端生成的幂等键 |
-| `upstream_request_id` | 上游确认 ID |
-| `created_at` | TTL 清理依据 |
+| 字段                  | 用途                           |
+| --------------------- | ------------------------------ |
+| `session_id`          | 本地 Chat ID 或上游 Session ID |
+| `client_request_id`   | 客户端生成的幂等键             |
+| `upstream_request_id` | 上游确认 ID                    |
+| `created_at`          | TTL 清理依据                   |
 
 唯一约束为 `(session_id, client_request_id)`。该表只解决重复提交，不保存消息内容、事件或文件。
 
@@ -172,7 +172,7 @@ agentapi.default_profile_id
 backend/open_webui/utils/agentapi.py
 ```
 
-适配器使用七牛 AgentAPI 官方推荐的 `anthropic` Python SDK，通过 `base_url` 指向七牛服务。SDK 负责认证、Session、事件分页和 FileAPI 请求；适配器负责 Open WebUI 权限校验、Session 绑定、`extra_body` 请求格式兼容和原始响应透传。完整 SDK 调用和分页注意事项见 [AgentAPI 接口契约](AGENT_MODE_AGENTAPI_REFERENCE.md)。
+适配器按七牛 AgentAPI 的 Claude Managed Agents 兼容协议调用上游。当前实现使用项目已有的 `httpx` 直接转发 JSON，以完整保留响应信封和未知字段；也可以改用项目已依赖的 `anthropic` Python SDK，并通过 `with_raw_response` 保持同样的透传语义。完整 SDK 调用和分页注意事项见 [AgentAPI 接口契约](AGENT_MODE_AGENTAPI_REFERENCE.md)。
 
 业务路由不直接拼接七牛 URL。适配层负责鉴权、超时、错误转换、游标和流式文件代理，提供：
 
@@ -184,7 +184,7 @@ submit_message(upstream_session_id, request_id, content) -> ack
 list_session_events(upstream_session_id, page, limit, order, created_at_gte) -> raw_event_page
 list_session_files(upstream_session_id) -> file_page
 stream_session_file(upstream_session_id, file_id, range_header) -> byte_stream
-cancel_session_run(upstream_session_id, upstream_run_id)
+interrupt_session(upstream_session_id) -> raw_event_ack
 delete_session(upstream_session_id)
 ```
 
@@ -215,12 +215,11 @@ delete_session(upstream_session_id)
 ### 6.3 发送消息
 
 1. 第一版只提交文本；不显示输入文件选择器，也不调用 AgentAPI 文件上传或 Session resource 接口。
-2. 前端立即显示本地 pending 用户消息，不要求先写入 Open WebUI 数据库。
-3. 前端生成 `client_request_id`，调用 Agent 消息提交接口。
-4. 后端校验发送者是本地会话 owner、当前仍具有绑定 profile 的 `read` 权限，并检查 Agent 会话状态和请求幂等键。
-5. 后端将消息提交到同一个上游 Session，并尽量原样返回上游 ack。
-6. 前端立即执行一次事件增量同步，之后按 Session 状态继续轮询。
-7. 页面关闭后停止轮询，AgentAPI 继续执行；用户再次进入时从上游分页加载完整结果。
+2. 前端调用 Agent 消息提交接口，不把 pending 消息写入 Open WebUI 数据库。
+3. 后端校验发送者是本地会话 owner，且当前仍具有绑定 profile 的 `read` 权限。
+4. 后端将消息提交到同一个上游 Session，并尽量原样返回上游 ack。
+5. 前端用 ack 中的事件立即更新界面，随后按 Session 状态和新的 `session.status_idle` 事件继续轮询。
+6. 页面关闭后停止轮询，AgentAPI 继续执行；用户再次进入时从上游分页加载完整结果。
 
 ### 6.4 轮询策略
 
@@ -229,9 +228,9 @@ delete_session(upstream_session_id)
 - 每一轮若返回 `next_page`，立即继续翻页直到读完，再安排下一次轮询；不能因为单页数量达到 `limit` 就等待下一个定时周期。
 - 消息提交成功后立即轮询一次；`running` 时每 1.5 秒轮询，`rescheduling` 时每 3 秒轮询。
 - 收到 `session.status_idle` 后再完成一次事件同步、查询一次 Session 取得最终 `usage`/`stats`，然后停止；`idle` 表示当前轮完成并等待下一条消息，不表示 Session 已终结。
-- 收到 `terminated` 或不可恢复的 `session.error` 后停止轮询并禁止继续发送。浏览器重新获得焦点或网络恢复时，立即执行一次“状态查询 + 增量事件同步”。
-- 使用一次请求完成后再启动下一次的 `setTimeout`，禁止使用可能产生重叠请求的 `setInterval`。页面离开时取消在途请求并清除定时器。
-- `429` 优先遵守 `Retry-After`；网络错误和可重试的 `5xx` 按 2、4、8、15、30 秒退避，成功后恢复正常频率。同一轮轮询始终只有一个在途请求。
+- 收到 `terminated` 后停止轮询并禁止继续发送。浏览器重新获得焦点时，立即执行一次“状态查询 + 增量事件同步”。
+- 使用一次请求完成后再启动下一次的 `setTimeout`，禁止使用可能产生重叠请求的 `setInterval`。页面离开时清除定时器。
+- 轮询网络错误后等待 4 秒再试；消息提交请求不自动重试，避免重复执行。
 - 第一版不使用 Open WebUI 常驻 SSE、Socket.IO 事件补发或进程内后台任务；多个页面各自轮询，后台标签页可暂停或降低频率，重新获得焦点时立即补查。
 
 ## 7. 文件处理
@@ -241,15 +240,15 @@ delete_session(upstream_session_id)
 ### 7.1 文件列表
 
 ```text
-GET /api/v1/agent/chats/{chat_id}/files
+GET /api/v1/agentapi/chats/{chat_id}/files
 ```
 
-后端先校验本地 Chat 权限，再使用绑定的上游 Session ID 调用 Session FileAPI。返回文件名、类型、大小、生成时间、文件 ID 和是否可预览。
+后端先校验本地 Chat 权限，再使用绑定的上游 Session ID 调用 Session FileAPI，完整返回上游文件分页结构。
 
-### 7.2 文件下载和预览
+### 7.2 文件下载
 
 ```text
-GET /api/v1/agent/chats/{chat_id}/files/{file_id}/content
+GET /api/v1/agentapi/chats/{chat_id}/files/{file_id}/content
 ```
 
 处理顺序：
@@ -259,7 +258,7 @@ GET /api/v1/agent/chats/{chat_id}/files/{file_id}/content
 3. 调用 Session FileAPI 验证 `file_id` 属于该 Session。
 4. 后端把上游响应流式转发给浏览器。
 
-Open WebUI 不写本地文件、不写 `file` 表、不上传对象存储，也不把七牛 API Key 或上游地址返回浏览器。如果 FileAPI 支持 Range/chunk，则直接透传；如果只能读取已完成文件，则文件完成后立即开始转发。
+Open WebUI 不写本地文件、不写 `file` 表、不上传对象存储，也不把七牛 API Key 或上游地址返回浏览器。第一版在文件完成后通过后端流式转发下载。
 
 ### 7.3 文件保留前提
 
@@ -326,8 +325,8 @@ POST   /api/v1/agentapi/chats/{chat_id}/messages  # 发送文本消息；仅 own
 POST   /api/v1/agentapi/chats/{chat_id}/interrupt # 仅 owner；撤销 profile read 后仍可停止在途任务
 GET    /api/v1/agentapi/chats/{chat_id}/files     # owner 或管理员只读
 GET    /api/v1/agentapi/chats/{chat_id}/files/{file_id}/content # owner 或管理员只读
-POST   /api/v1/chats/{chat_id}/archive          # 仅 owner；只切换本地 archived
-DELETE /api/v1/chats/{chat_id}                 # 仅 owner；先删上游 Session，再删本地索引
+POST   /api/v1/agentapi/chats/{chat_id}/archive # 仅 owner；只切换本地 archived
+DELETE /api/v1/agentapi/chats/{chat_id}         # 仅 owner；先删上游 Session，再删本地索引
 ```
 
 第一版 `POST /api/v1/agentapi/chats` 的请求体不接受 `profile_id`、`agent_id` 或 `agent_version`；后端始终使用配置的 `default_profile_id`。管理端配置接口可以在内部 upsert 这一条 profile，但普通用户只看到安全的展示字段。未来开放多 Agent 时再增加复数 profile 列表和显式选择参数。
@@ -370,7 +369,7 @@ Agent 页面维护内存中的事件列表，不写 Chat 消息接口。页面�
 
 每条 `agent.message` 独立展示；思考、进度、工具调用、工具结果、状态和错误按事件类型展示或折叠。前端以 Session 终态为准，不能在终态后继续显示“Agent is working”。
 
-文件下载可以通过后端代理接口触发浏览器下载。大文件不在前端转成完整 Blob，优先使用浏览器下载流或后端支持 Range 的方式。
+文件下载通过后端流式代理接口读取；浏览器侧不把文件写入 Open WebUI 的本地文件体系。
 
 ## 11. 会话生命周期
 
@@ -407,16 +406,16 @@ Session 文件随上游 Session 生命周期处理，Open WebUI 不执行本地�
 
 ## 12. 异常和重试
 
-| 场景 | 处理 |
-| --- | --- |
-| AgentAPI 暂时不可用 | 返回明确的上游不可用状态；查询和文件请求可按 Retry-After 退避 |
-| 消息提交超时 | 只有在有幂等 request ID 时自动重试；否则标记“结果未知”，禁止盲目重新提交 |
-| 事件分页中断 | 保留前端最后游标，恢复后从该游标继续查询 |
-| Session 已过期/被删除 | 本地会话显示已结束，禁止继续发送 |
-| 文件已过期 | 返回 `SESSION_FILE_EXPIRED`，不伪造本地文件仍可用 |
-| 浏览器断开 | 停止轮询，不取消上游任务 |
-| Open WebUI 重启 | 无需恢复本地任务；重新查询上游 Session 状态和事件分页 |
-| 删除上游失败 | 保留本地绑定，管理员或用户可重试删除 |
+| 场景                  | 处理                                                                     |
+| --------------------- | ------------------------------------------------------------------------ |
+| AgentAPI 暂时不可用   | 返回明确的上游不可用状态；查询和文件请求可按 Retry-After 退避            |
+| 消息提交超时          | 只有在有幂等 request ID 时自动重试；否则标记“结果未知”，禁止盲目重新提交 |
+| 事件分页中断          | 保留前端最后游标，恢复后从该游标继续查询                                 |
+| Session 已过期/被删除 | 本地会话显示已结束，禁止继续发送                                         |
+| 文件已过期            | 返回 `SESSION_FILE_EXPIRED`，不伪造本地文件仍可用                        |
+| 浏览器断开            | 停止轮询，不取消上游任务                                                 |
+| Open WebUI 重启       | 无需恢复本地任务；重新查询上游 Session 状态和事件分页                    |
+| 删除上游失败          | 保留本地绑定，管理员或用户可重试删除                                     |
 
 ## 13. 数据迁移和兼容
 

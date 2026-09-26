@@ -13,6 +13,7 @@
 	import SoundHigh from '$lib/components/icons/SoundHigh.svelte';
 	import UserCircle from '$lib/components/icons/UserCircle.svelte';
 	import WrenchAlt from '$lib/components/icons/WrenchAlt.svelte';
+	import SparklesSolid from '$lib/components/icons/SparklesSolid.svelte';
 
 	export let id: string;
 	export let className = 'size-3.5';
@@ -51,6 +52,8 @@
 			d="M4 11.5v4C4 17.43 7.58 19 12 19s8-1.57 8-3.5v-4"
 		/>
 	</svg>
+{:else if id === 'agent'}
+	<SparklesSolid {className} {strokeWidth} />
 {:else if id === 'subagents'}
 	<UserCircle {className} {strokeWidth} />
 {:else if id === 'evaluations'}

@@ -92,6 +92,8 @@
 	import CheckIcon from '../icons/Check.svelte';
 	import MoreHorizontalIcon from './Sidebar/icons/MoreHorizontal.svelte';
 	import MobileSwipePanel from '../common/MobileSwipePanel.svelte';
+	import SparklesSolid from '../icons/SparklesSolid.svelte';
+	import { getAgentChats, getAgentProfile } from '$lib/apis/agentapi';
 
 	const BREAKPOINT = 768;
 	const DEFAULT_PINNED_ITEMS = ['notes', 'workspace'];
@@ -126,6 +128,7 @@
 	let showFolders = false;
 	let showSharedFolders = false;
 	let showChatsMenu = false;
+	let agentAvailable = false;
 
 	let folders = {};
 	type SelectedSidebarFolder = { id: string } | null;
@@ -734,6 +737,11 @@
 		});
 
 		await tick();
+		const [agentProfile, agentChats] = await Promise.all([
+			getAgentProfile(localStorage.token),
+			getAgentChats(localStorage.token, { limit: 1 }).catch(() => ({ items: [] }))
+		]);
+		agentAvailable = Boolean(agentProfile || agentChats.items?.length);
 		await initSidebarData();
 		initPinnedMenuSortable();
 
@@ -1249,6 +1257,29 @@
 								<HotkeyHint name="search" className=" hover-reveal " />
 							</button>
 						</div>
+
+						{#if agentAvailable}
+							<div class="px-1 flex justify-center text-gray-700 dark:text-gray-300">
+								<a
+									id="sidebar-agent-button"
+									class="group grow flex items-center space-x-2 rounded-xl px-2 py-1.5 transition {$page
+										.url.pathname === '/agent' || $page.url.pathname.startsWith('/a/')
+										? 'bg-black/[0.035] dark:bg-white/[0.045]'
+										: 'hover:bg-gray-100 dark:hover:bg-gray-900'}"
+									href="/agent"
+									on:click={itemClickHandler}
+									draggable="false"
+									aria-label={$i18n.t('Agent')}
+								>
+									<div class="self-center flex size-4 shrink-0 items-center justify-center">
+										<SparklesSolid className="size-4" />
+									</div>
+									<div class="flex flex-1 self-center translate-y-[0.5px]">
+										<div class="self-center text-[0.8125rem] leading-5">{$i18n.t('Agent')}</div>
+									</div>
+								</a>
+							</div>
+						{/if}
 
 						<div id="pinned-menu-items-list">
 							{#each pinnedItems as itemId (itemId)}

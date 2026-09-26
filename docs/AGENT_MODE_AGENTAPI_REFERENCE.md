@@ -59,14 +59,14 @@ page = client.beta.sessions.events.list(
 
 ```json
 {
-  "events": [
-    {
-      "type": "user.message",
-      "input": {
-        "parts": [{ "type": "text", "text": "任务内容" }]
-      }
-    }
-  ]
+	"events": [
+		{
+			"type": "user.message",
+			"input": {
+				"parts": [{ "type": "text", "text": "任务内容" }]
+			}
+		}
+	]
 }
 ```
 
@@ -74,25 +74,25 @@ page = client.beta.sessions.events.list(
 
 ```ts
 const response = await client.beta.sessions.events.send(
-  session.id,
-  {
-    events: [
-      {
-        type: 'user.message',
-        content: [{ type: 'text', text: '任务内容' }],
-      },
-    ],
-  },
-  {
-    body: {
-      events: [
-        {
-          type: 'user.message',
-          input: { parts: [{ type: 'text', text: '任务内容' }] },
-        },
-      ],
-    },
-  },
+	session.id,
+	{
+		events: [
+			{
+				type: 'user.message',
+				content: [{ type: 'text', text: '任务内容' }]
+			}
+		]
+	},
+	{
+		body: {
+			events: [
+				{
+					type: 'user.message',
+					input: { parts: [{ type: 'text', text: '任务内容' }] }
+				}
+			]
+		}
+	}
 );
 ```
 
@@ -100,8 +100,8 @@ TypeScript 分页对象的原始信封在 `page.body`：
 
 ```ts
 const page = await client.beta.sessions.events.list(session.id, {
-  limit: 20,
-  order: 'asc',
+	limit: 20,
+	order: 'asc'
 });
 
 page.body.data;
@@ -140,39 +140,39 @@ GET /v1/sessions?limit={limit}&page={page}
 
 ```json
 {
-  "data": [
-    {
-      "id": "ses_fd75aa2265bf4fbd82942040",
-      "type": "session",
-      "agent": {
-        "type": "agent",
-        "id": "agt_23e6d8a187ac4382bf9665a9",
-        "name": "短剧",
-        "runtime": "claudecode",
-        "version": 4,
-        "model": {
-          "id": "deepseek/deepseek-v4-flash-20260731",
-          "effort": { "type": "medium" }
-        }
-      },
-      "environment_id": "env_75ab58e00b7e4af1bf0153d9",
-      "deployment_id": null,
-      "status": "idle",
-      "title": "Hello！",
-      "metadata": {},
-      "resources": [],
-      "vault_ids": [],
-      "usage": {},
-      "stats": {
-        "active_seconds": 0,
-        "duration_seconds": 0
-      },
-      "created_at": "2026-09-24T23:01:41.391+08:00",
-      "updated_at": "2026-09-24T23:01:41.391+08:00",
-      "archived_at": null
-    }
-  ],
-  "next_page": "ses_fd75aa2265bf4fbd82942040"
+	"data": [
+		{
+			"id": "ses_fd75aa2265bf4fbd82942040",
+			"type": "session",
+			"agent": {
+				"type": "agent",
+				"id": "agt_23e6d8a187ac4382bf9665a9",
+				"name": "短剧",
+				"runtime": "claudecode",
+				"version": 4,
+				"model": {
+					"id": "deepseek/deepseek-v4-flash-20260731",
+					"effort": { "type": "medium" }
+				}
+			},
+			"environment_id": "env_75ab58e00b7e4af1bf0153d9",
+			"deployment_id": null,
+			"status": "idle",
+			"title": "Hello！",
+			"metadata": {},
+			"resources": [],
+			"vault_ids": [],
+			"usage": {},
+			"stats": {
+				"active_seconds": 0,
+				"duration_seconds": 0
+			},
+			"created_at": "2026-09-24T23:01:41.391+08:00",
+			"updated_at": "2026-09-24T23:01:41.391+08:00",
+			"archived_at": null
+		}
+	],
+	"next_page": "ses_fd75aa2265bf4fbd82942040"
 }
 ```
 
@@ -190,15 +190,15 @@ POST /v1/sessions
 
 ```json
 {
-  "agent": {
-    "type": "agent",
-    "id": "agt_23e6d8a187ac4382bf9665a9"
-  },
-  "environment_id": "env_75ab58e00b7e4af1bf0153d9",
-  "metadata": {
-    "open_webui_chat_id": "<local-chat-id>",
-    "open_webui_user_id": "<owner-user-id>"
-  }
+	"agent": {
+		"type": "agent",
+		"id": "agt_23e6d8a187ac4382bf9665a9"
+	},
+	"environment_id": "env_75ab58e00b7e4af1bf0153d9",
+	"metadata": {
+		"open_webui_chat_id": "<local-chat-id>",
+		"open_webui_user_id": "<owner-user-id>"
+	}
 }
 ```
 
@@ -216,21 +216,21 @@ Open WebUI 使用默认 profile 中的 `agent.id` 和 `environment_id`，但创�
 
 ```json
 {
-  "id": "ses_e2b13b6e62fe44008352e829",
-  "type": "session",
-  "agent": {
-    "type": "agent",
-    "id": "agt_23e6d8a187ac4382bf9665a9",
-    "version": 4
-  },
-  "environment_id": "env_75ab58e00b7e4af1bf0153d9",
-  "status": "idle",
-  "metadata": {
-    "purpose": "api-contract-test"
-  },
-  "created_at": "2026-09-24T23:03:02.096382096+08:00",
-  "updated_at": "2026-09-24T23:03:02.096382096+08:00",
-  "archived_at": null
+	"id": "ses_e2b13b6e62fe44008352e829",
+	"type": "session",
+	"agent": {
+		"type": "agent",
+		"id": "agt_23e6d8a187ac4382bf9665a9",
+		"version": 4
+	},
+	"environment_id": "env_75ab58e00b7e4af1bf0153d9",
+	"status": "idle",
+	"metadata": {
+		"purpose": "api-contract-test"
+	},
+	"created_at": "2026-09-24T23:03:02.096382096+08:00",
+	"updated_at": "2026-09-24T23:03:02.096382096+08:00",
+	"archived_at": null
 }
 ```
 
@@ -266,15 +266,15 @@ GET /v1/sessions/{session_id}
 
 ```json
 {
-  "id": "ses_e2b13b6e62fe44008352e829",
-  "status": "idle",
-  "agent": {
-    "id": "agt_23e6d8a187ac4382bf9665a9",
-    "version": 4
-  },
-  "environment_id": "env_75ab58e00b7e4af1bf0153d9",
-  "metadata": {},
-  "updated_at": "2026-09-24T23:03:02.096+08:00"
+	"id": "ses_e2b13b6e62fe44008352e829",
+	"status": "idle",
+	"agent": {
+		"id": "agt_23e6d8a187ac4382bf9665a9",
+		"version": 4
+	},
+	"environment_id": "env_75ab58e00b7e4af1bf0153d9",
+	"metadata": {},
+	"updated_at": "2026-09-24T23:03:02.096+08:00"
 }
 ```
 
@@ -294,26 +294,24 @@ GET /v1/sessions/{session_id}/events?limit={limit}&page={page}
 
 ```json
 {
-  "data": [
-    {
-      "id": "evt_1d640444fc544df4a9f699b5",
-      "type": "user.message",
-      "session_id": "ses_fd75aa2265bf4fbd82942040",
-      "sequence_number": 1,
-      "processed_at": "2026-09-22T11:24:56.98+08:00",
-      "content": [
-        { "text": "Hello！", "type": "text" }
-      ]
-    },
-    {
-      "id": "evt_bdb2ebad27956ccc149d9eee",
-      "type": "session.status_running",
-      "session_id": "ses_fd75aa2265bf4fbd82942040",
-      "sequence_number": 2,
-      "processed_at": "2026-09-22T11:24:56.98+08:00"
-    }
-  ],
-  "next_page": "evt_bdb2ebad27956ccc149d9eee"
+	"data": [
+		{
+			"id": "evt_1d640444fc544df4a9f699b5",
+			"type": "user.message",
+			"session_id": "ses_fd75aa2265bf4fbd82942040",
+			"sequence_number": 1,
+			"processed_at": "2026-09-22T11:24:56.98+08:00",
+			"content": [{ "text": "Hello！", "type": "text" }]
+		},
+		{
+			"id": "evt_bdb2ebad27956ccc149d9eee",
+			"type": "session.status_running",
+			"session_id": "ses_fd75aa2265bf4fbd82942040",
+			"sequence_number": 2,
+			"processed_at": "2026-09-22T11:24:56.98+08:00"
+		}
+	],
+	"next_page": "evt_bdb2ebad27956ccc149d9eee"
 }
 ```
 
@@ -336,8 +334,8 @@ span.model_request_start
 
 ```json
 {
-  "data": [],
-  "next_page": null
+	"data": [],
+	"next_page": null
 }
 ```
 
@@ -353,14 +351,12 @@ POST /v1/sessions/{session_id}/events
 
 ```json
 {
-  "events": [
-    {
-      "type": "user.message",
-      "content": [
-        { "text": "请开始执行任务", "type": "text" }
-      ]
-    }
-  ]
+	"events": [
+		{
+			"type": "user.message",
+			"content": [{ "text": "请开始执行任务", "type": "text" }]
+		}
+	]
 }
 ```
 
@@ -368,18 +364,16 @@ POST /v1/sessions/{session_id}/events
 
 ```json
 {
-  "data": [
-    {
-      "id": "evt_03e9c7a23c0948449e3afec4",
-      "type": "user.message",
-      "session_id": "ses_e2b13b6e62fe44008352e829",
-      "sequence_number": 1,
-      "processed_at": "2026-09-24T15:03:25.046661Z",
-      "content": [
-        { "text": "AgentAPI contract test", "type": "text" }
-      ]
-    }
-  ]
+	"data": [
+		{
+			"id": "evt_03e9c7a23c0948449e3afec4",
+			"type": "user.message",
+			"session_id": "ses_e2b13b6e62fe44008352e829",
+			"sequence_number": 1,
+			"processed_at": "2026-09-24T15:03:25.046661Z",
+			"content": [{ "text": "AgentAPI contract test", "type": "text" }]
+		}
+	]
 }
 ```
 
@@ -401,25 +395,25 @@ GET /v1/files?scope_id={session_id}&limit={limit}&page={page}
 
 ```json
 {
-  "data": [
-    {
-      "id": "file_400a1556d49846119828b254",
-      "type": "file",
-      "scope": {
-        "id": "ses_fd75aa2265bf4fbd82942040",
-        "type": "session"
-      },
-      "filename": "换命千金_前十集单集剧本/第10集_她手里的东西.md",
-      "mime_type": "text/markdown; charset=utf-8",
-      "size_bytes": 7520,
-      "downloadable": true,
-      "created_at": "2026-09-22T14:16:13.542+08:00"
-    }
-  ],
-  "next_page": "page_file_400a1556d49846119828b254",
-  "has_more": true,
-  "first_id": "file_400a1556d49846119828b254",
-  "last_id": "file_400a1556d49846119828b254"
+	"data": [
+		{
+			"id": "file_400a1556d49846119828b254",
+			"type": "file",
+			"scope": {
+				"id": "ses_fd75aa2265bf4fbd82942040",
+				"type": "session"
+			},
+			"filename": "换命千金_前十集单集剧本/第10集_她手里的东西.md",
+			"mime_type": "text/markdown; charset=utf-8",
+			"size_bytes": 7520,
+			"downloadable": true,
+			"created_at": "2026-09-22T14:16:13.542+08:00"
+		}
+	],
+	"next_page": "page_file_400a1556d49846119828b254",
+	"has_more": true,
+	"first_id": "file_400a1556d49846119828b254",
+	"last_id": "file_400a1556d49846119828b254"
 }
 ```
 
@@ -465,18 +459,33 @@ DELETE /v1/sessions/{session_id}
 
 Open WebUI 删除 Agent 会话时先调用上游删除。上游删除成功后再删除本地 `chat` 索引；上游失败则保留本地绑定并允许重试。Session 文件随上游 Session 生命周期处理。
 
+## 11. 中断当前任务
+
+中断通过现有事件提交接口发送 `user.interrupt`，不是独立的 Session 子资源：
+
+```http
+POST /v1/sessions/{session_id}/events
+```
+
+```json
+{
+	"events": [{ "type": "user.interrupt" }]
+}
+```
+
+Open WebUI 只允许 Session owner 调用该操作；管理员查看他人会话时不能中断。即使 owner 的 profile `read` 已被撤销，也仍允许中断自己正在运行的任务。
+
 ### Open WebUI 归档不映射到上游归档
 
 Open WebUI 的归档和取消归档只切换本地 `chat.archived`，用于控制会话是否出现在默认列表中，不调用 AgentAPI 的 Session archive、interrupt 或 delete 接口。上游 Session 在本地归档期间保持原状态，长任务可继续执行；取消归档后继续使用原 Session。
 
 AgentAPI 的 Session archive 会改变上游会话生命周期并禁止继续发送事件，与 Open WebUI 可恢复的列表归档语义不同，因此不纳入当前适配器映射。若未来需要该能力，应作为独立的“结束 Session”操作设计，不能复用 Open WebUI 归档入口。
 
-## 11. 尚未纳入第一版契约的能力
+## 12. 尚未纳入第一版契约的能力
 
 以下能力不纳入第一版；其中尚未通过实际接口验证的能力，不能作为实现前提：
 
 - 输入文件上传、创建会话时挂载文件，以及运行中增删 Session resource；
-- 取消或中断正在运行的任务；
 - 显式消息 `request_id` 幂等和重复提交语义；
 - 文件 Range/分块读取；
 - Agent、Environment、Skill 的发现和下拉列表接口；
@@ -484,16 +493,17 @@ AgentAPI 的 Session archive 会改变上游会话生命周期并禁止继续发
 
 第一版只接受文本输入并读取 Session 输出文件，不提供输入文件上传或挂载能力。默认 Agent profile 保存管理员填写的 Agent ID 和 Environment ID，不保存 Version；页面使用事件分页轮询，超时提交不自动重试。若后续确认产品需要，再把这些能力作为兼容增强加入适配器。
 
-## 12. Open WebUI 适配器映射
+## 13. Open WebUI 适配器映射
 
-| Open WebUI 业务动作 | 上游接口 |
-| --- | --- |
-| 创建 Agent 会话 | `POST /v1/sessions` |
-| 刷新会话状态 | `GET /v1/sessions/{session_id}` |
-| 加载历史和执行进度 | `GET /v1/sessions/{session_id}/events` |
-| 发送用户消息 | `POST /v1/sessions/{session_id}/events` |
-| 列出会话文件 | `GET /v1/files?scope_id={session_id}` |
-| 预览或下载文件 | `GET /v1/files/{file_id}/content` |
-| 删除 Agent 会话 | `DELETE /v1/sessions/{session_id}` |
+| Open WebUI 业务动作 | 上游接口                                                             |
+| ------------------- | -------------------------------------------------------------------- |
+| 创建 Agent 会话     | `POST /v1/sessions`                                                  |
+| 刷新会话状态        | `GET /v1/sessions/{session_id}`                                      |
+| 加载历史和执行进度  | `GET /v1/sessions/{session_id}/events`                               |
+| 发送用户消息        | `POST /v1/sessions/{session_id}/events`                              |
+| 中断当前任务        | `POST /v1/sessions/{session_id}/events`，事件类型为 `user.interrupt` |
+| 列出会话文件        | `GET /v1/files?scope_id={session_id}`                                |
+| 预览或下载文件      | `GET /v1/files/{file_id}/content`                                    |
+| 删除 Agent 会话     | `DELETE /v1/sessions/{session_id}`                                   |
 
 所有上游请求都必须在后端完成权限校验、Session 绑定校验、超时设置和错误转换。AgentAPI 返回的消息、状态和文件不在 Open WebUI 本地持久化。
