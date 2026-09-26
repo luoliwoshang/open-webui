@@ -283,40 +283,24 @@
 				{/if}
 			</main>
 
-			{#if files.length > 0 || Object.keys(session?.usage ?? {}).length > 0 || session?.stats}
+			{#if files.length > 0}
 				<aside
 					class="hidden w-72 shrink-0 overflow-y-auto border-l border-gray-100 p-4 dark:border-gray-850 lg:block"
 				>
-					{#if files.length > 0}
-						<h2 class="mb-3 text-xs font-medium uppercase tracking-wider text-gray-400">
-							{$i18n.t('Outputs')}
-						</h2>
-						<div class="flex flex-col gap-2">
-							{#each files as file}
-								<button
-									class="flex items-center gap-2 rounded-xl border border-gray-100 p-3 text-left text-xs hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-900"
-									on:click={() => downloadAgentFile(localStorage.token, chatId, file)}
-								>
-									<ArrowDownTray className="size-4 shrink-0" />
-									<span class="min-w-0 flex-1 truncate">{file.filename ?? file.id}</span>
-								</button>
-							{/each}
-						</div>
-					{/if}
-
-					{#if Object.keys(session?.usage ?? {}).length > 0 || session?.stats}
-						<details class="mt-5 border-t border-gray-100 pt-4 text-xs dark:border-gray-850">
-							<summary class="cursor-pointer font-medium text-gray-500">
-								{$i18n.t('Usage and statistics')}
-							</summary>
-							<pre
-								class="mt-3 overflow-x-auto whitespace-pre-wrap text-[11px] text-gray-500">{JSON.stringify(
-									{ usage: session?.usage ?? {}, stats: session?.stats ?? {} },
-									null,
-									2
-								)}</pre>
-						</details>
-					{/if}
+					<h2 class="mb-3 text-xs font-medium uppercase tracking-wider text-gray-400">
+						{$i18n.t('Outputs')}
+					</h2>
+					<div class="flex flex-col gap-2">
+						{#each files as file}
+							<button
+								class="flex items-center gap-2 rounded-xl border border-gray-100 p-3 text-left text-xs hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-900"
+								on:click={() => downloadAgentFile(localStorage.token, chatId, file)}
+							>
+								<ArrowDownTray className="size-4 shrink-0" />
+								<span class="min-w-0 flex-1 truncate">{file.filename ?? file.id}</span>
+							</button>
+						{/each}
+					</div>
 				</aside>
 			{/if}
 		</div>

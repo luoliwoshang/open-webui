@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
@@ -411,8 +412,10 @@ async def download_file(
         response, body = await client.stream_file(file_id)
     except AgentAPIError as error:
         _raise_upstream(error)
-    headers = {}
-    for name in ('content-disposition', 'content-length', 'accept-ranges'):
+    headers = {
+        'content-disposition': f"attachment; filename*=UTF-8''{quote(file.get('filename') or file_id, safe='')}"
+    }
+    for name in ('content-length', 'accept-ranges'):
         if value := response.headers.get(name):
             headers[name] = value
     return StreamingResponse(body, media_type=response.headers.get('content-type'), headers=headers)

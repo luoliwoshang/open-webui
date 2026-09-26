@@ -348,9 +348,9 @@ src/lib/apis/agentapi/index.ts
 
 - 普通用户侧在主导航中提供独立的“Agent”入口，进入 `/agent` 查看自己的 Agent 会话；Agent 会话使用 `/a/{chat_id}`，不与普通 Chat 的 `/c/{chat_id}` 和会话列表混排。
 - 当前用户没有默认 profile 的 `read` 权限时，不显示创建 Agent 会话的入口；已有历史会话仍可从个人 Agent 会话列表进入，但页面为只读且不显示消息输入框。
-- 管理员侧复用现有 `/admin/users` 人员管理入口。在用户操作菜单现有 Chat 对话入口旁增加独立的“Agent 对话”入口，或在 `src/lib/components/admin/Users/UserList/UserChatsModal.svelte` 中提供“Chat / Agent”两个明确的 Tab。
-- 管理员从人员菜单进入 Agent 对话列表时，只查询所选用户的 `mode='agent'` 会话；列表至少显示标题、Agent profile、Session 状态、创建/更新时间和用量摘要。
-- 点击会话后复用 `AgentChat.svelte`，由后端鉴权结果决定只读状态，不通过前端查询参数声明管理员权限。查看他人会话时显示明确的“管理员只读”标识，展示完整事件、状态、输出文件、`usage` 和 `stats`，隐藏消息输入、发送、interrupt、归档、删除等修改操作。
+- 管理员侧复用现有 `/admin/users` 人员管理入口，在用户操作菜单现有 Chat 对话入口旁增加独立的“Agent 对话”入口。
+- 管理员从人员菜单进入 Agent 对话列表时，只查询所选用户的 `mode='agent'` 会话；列表显示标题、Agent profile 和创建/更新时间。
+- 点击会话后复用 `AgentChat.svelte`，由后端鉴权结果决定只读状态，不通过前端查询参数声明管理员权限。查看他人会话时显示明确的“管理员只读”标识，展示完整事件、状态和输出文件，隐藏消息输入、发送、interrupt、归档、删除等修改操作。`usage` 和 `stats` 继续由状态接口原样返回，但第一版不在界面展示。
 - 隐藏控件只用于产品表达，后端仍必须拒绝管理员对他人会话调用消息、interrupt 或其他修改接口；不能把前端只读状态当作权限校验。
 - 如果普通 Chat 路由收到 `mode='agent'` 的本地 Chat ID，应跳转到 `/a/{chat_id}` 或拒绝加载；Agent 详情页收到普通 Chat ID 时同样拒绝，防止两套会话组件混用。
 
