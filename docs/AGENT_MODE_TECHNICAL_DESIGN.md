@@ -19,6 +19,8 @@ Agent 与 Chat 是两种平级会话模式，但 Agent 的消息、状态和文�
 7. API Key 始终只存在于后端配置和后端到 AgentAPI 的请求中。
 8. Open WebUI 的归档只修改本地 `chat.archived`，不归档、中断或修改上游 AgentAPI Session；取消归档后仍可继续访问原 Session。
 9. 管理员可以全局只读所有用户的 Agent 会话、事件、状态、输出文件和用量，但不能代替会话 owner 发送消息或中断任务。
+10. 第一版全站只配置一个默认 Agent，普通用户不选择 Agent；数据层使用可容纳多个 profile 的独立表，为以后扩展多 Agent 保留空间。
+11. 管理员不配置 Agent Version。创建每个 Session 时省略 `agent.version`，由 AgentAPI 解析为当时的最新版本，再把响应中的实际版本作为会话快照保存。
 
 目前已通过七牛 AgentAPI 测试接口确认：
 
@@ -38,7 +40,8 @@ Session 和 FileAPI 按长期保留前提使用。正式接入前仍需确认消
 | `backend/open_webui/main.py` | 挂载 Agent 路由 |
 | `models/chats.py` 的 `chat` 表 | 保存 Agent 本地索引、owner、标题、归档、文件夹和上游 Session 绑定 |
 | `Chat.mode` | 区分 `chat` 与 `agent` |
-| `models/config.py` 的 Config | 保存 AgentAPI 地址、启用状态、Key 掩码状态和 Agent 配置 |
+| `models/config.py` 的 Config | 保存 AgentAPI 地址、启用状态、API Key 和默认 profile ID |
+| 新增 `agent_profile` 表 | 保存可扩展的 Agent/Environment 配置；第一版只展示并启用一个默认 profile |
 | `access_grant`、Groups | 控制 Agent 查看/使用权限 |
 | `ENABLE_ADMIN_CHAT_ACCESS` | 不限制 Agent 会话；Agent 模式明确允许管理员全局只读所有用户会话 |
 | `AuditLoggingMiddleware` | 记录配置、查看、文件下载、删除和管理行为 |
@@ -52,7 +55,7 @@ Session 和 FileAPI 按长期保留前提使用。正式接入前仍需确认消
 flowchart LR
     UI[Agent Web UI] --> API[FastAPI Agent Router]
     API --> AUTH[Open WebUI 身份与权限]
-    API --> DB[(Chat 表 / Config / AccessGrant)]
+    API --> DB[(Chat / AgentProfile / Config / AccessGrant)]
     API --> AD[AgentAPI Adapter]
     AD --> S[七牛 AgentAPI Session]
     AD --> F[Session-scoped FileAPI]
@@ -95,35 +98,58 @@ Agent 不需要单独 Worker、Redis、S3 或本地文件目录。七牛 AgentAP
 
 `chat.chat` 只保留最小结构，不写入 Agent 消息和事件；Agent 不双写到 `chat_message`。本地 Chat 行存在的目的是提供 owner、管理员范围、列表、归档、删除和审计关联。
 
-### 4.2 Agent 配置
+### 4.2 AgentAPI 全局配置
 
-第一版可复用现有 Config JSON 保存：
+连接级配置继续使用现有逐 key 的 Config 表：
 
 ```text
 agentapi.enabled
 agentapi.base_url
 agentapi.api_key
-agentapi.profiles[]
+agentapi.default_profile_id
 ```
 
-每个 profile 至少包含：
+- `base_url` 默认 `https://agent.qiniuapi.com`，作为高级项允许管理员修改。
+- `api_key` 只在后端保存。管理接口只返回 `configured: true/false` 或掩码，空值表示保持原 Key，明确的替换操作才写入新值。
+- `default_profile_id` 指向 `agent_profile.id`。第一版创建会话总是由后端解析该指针，前端和普通用户请求都不提交 profile ID。
 
-```json
-{
-  "id": "internal-profile-id",
-  "name": "报告 Agent",
-  "description": "...",
-  "agent_id": "qiniu-agent-id",
-  "agent_version": 1,
-  "environment_id": "qiniu-environment-id",
-  "enabled": true,
-  "access_grants": []
-}
-```
+### 4.3 `agent_profile` 表
 
-Agent 配置授权使用现有 user/group grant 语义：`read` 表示可以看到 Agent，`write` 表示可以创建会话和发送消息。管理员配置权限继续使用现有 workspace/admin 权限。
+虽然第一版管理面板只展示一条默认 Agent 配置，数据库仍使用一张独立表，而不是把 profiles 数组塞入 Config JSON：
 
-### 4.3 可选幂等表
+| 字段 | 用途 |
+| --- | --- |
+| `id` | Open WebUI 内部 profile ID |
+| `name` | UI 展示名称；验证连接后可用上游 Agent 名称预填 |
+| `description` | 可选的产品说明 |
+| `agent_id` | 七牛 Agent ID，必填 |
+| `environment_id` | 七牛 Environment ID，必填 |
+| `enabled` | 是否允许用该 profile 新建 Session |
+| `created_by` | 创建或首次配置的管理员 ID，用于审计 |
+| `meta` | 可选扩展 JSON，只保存非敏感展示/能力元数据 |
+| `created_at`、`updated_at` | 审计和排序时间 |
+
+表中不保存 `agent_version`、API Key 或授权列表。API Key 属于连接级 Config；授权继续使用现有 `access_grant` 表，并设置 `resource_type='agent_profile'`、`resource_id=agent_profile.id`。Agent 配置授权沿用当前方案的 user/group grant 语义：`read` 表示可以看到 Agent，`write` 表示可以创建会话和发送消息。管理员配置权限继续使用现有 workspace/admin 权限。
+
+`meta` 不能用来绕过正式字段，也不能写入 API Key、Agent Version 或 grants。以后增加多 Agent UI 时，可以直接列出多条 `agent_profile` 并切换 `default_profile_id`，不需要迁移已有 Session 或 Chat。
+
+### 4.4 第一版管理表单
+
+管理员只看到一个“默认 Agent”配置卡，字段为：
+
+1. 启用 Agent 模式；
+2. AgentAPI Base URL（默认折叠为高级设置）；
+3. API Key（密码输入、只显示是否已配置，支持替换）；
+4. Agent ID；
+5. Environment ID；
+6. 展示名称（可由验证结果预填，允许修改）；
+7. 描述（可选）；
+8. 可使用的用户/用户组授权；
+9. “验证连接”按钮。
+
+不提供 Agent Version 字段，不提供“是否使用最新版”开关，也不向普通用户提供 Agent 选择器。验证连接应同时校验 Key、Agent ID 和 Environment ID，并显示上游 Agent 名称及当前解析到的版本，但该版本仅是验证信息，不持久化到 profile。
+
+### 4.5 可选幂等表
 
 如果七牛消息提交接口原生支持幂等 `request_id`，不增加任何新表，直接把前端 `client_request_id` 传给上游。
 
@@ -170,10 +196,10 @@ delete_session(upstream_session_id)
 
 ### 6.1 创建会话
 
-1. 用户选择已授权且启用的 Agent。
-2. 后端检查 Agent `write` 权限和 AgentAPI 全局启用状态。
-3. 后端使用创建时的 Agent ID、Version、Environment 调用 AgentAPI 创建 Session。
-4. 上游返回 Session ID 后，写入一条 `chat.mode='agent'` 的本地索引记录和配置快照。
+1. 用户从独立 Agent 入口发起新会话，不选择 Agent，也不提交 profile ID。
+2. 后端读取 `agentapi.default_profile_id`，检查默认 profile 已启用、用户具有 Agent `write` 权限且 AgentAPI 全局启用。
+3. 后端使用 profile 的 Agent ID 和 Environment ID 创建 Session，请求中明确省略 `agent.version`，让 AgentAPI 解析当时的最新版本。
+4. 上游返回 Session ID 和实际 `agent.version` 后，写入一条 `chat.mode='agent'` 的本地索引记录；`profile_id`、Agent ID、Environment ID 及响应中的实际 Version 都作为会话快照保存。
 5. 本地写入失败时，调用上游删除 Session，避免产生孤儿 Session。
 
 ### 6.2 加载会话
@@ -287,7 +313,7 @@ Open WebUI 不写本地文件、不写 `file` 表、不上传对象存储，也�
 GET    /api/v1/agentapi/config                 # 管理员
 POST   /api/v1/agentapi/config                 # 管理员
 POST   /api/v1/agentapi/config/verify          # 管理员
-GET    /api/v1/agentapi/profiles               # 当前用户可用 Agent
+GET    /api/v1/agentapi/profile                # 当前用户可用的单个默认 Agent；不返回 Key 或 Version 配置
 
 GET    /api/v1/agentapi/chats                  # 普通用户列出自己的；管理员列出所有用户的
 POST   /api/v1/agentapi/chats                  # 创建 Agent Chat + 上游 Session
@@ -300,6 +326,8 @@ GET    /api/v1/agentapi/chats/{chat_id}/files/{file_id}/content # owner 或管�
 POST   /api/v1/chats/{chat_id}/archive          # 仅 owner；只切换本地 archived
 DELETE /api/v1/chats/{chat_id}                 # 仅 owner；先删上游 Session，再删本地索引
 ```
+
+第一版 `POST /api/v1/agentapi/chats` 的请求体不接受 `profile_id`、`agent_id` 或 `agent_version`；后端始终使用配置的 `default_profile_id`。管理端配置接口可以在内部 upsert 这一条 profile，但普通用户只看到安全的展示字段。未来开放多 Agent 时再增加复数 profile 列表和显式选择参数。
 
 事件接口使用上游 `next_page` 作为下一次请求的 `page` 参数，不要求 Open WebUI 生成新的本地 sequence。文件接口使用 `scope_id` 查询 Session 文件，并在下载前再次校验返回 metadata 的 `scope.id`。所有路由先通过本地 Chat ID 进行身份和权限判断，再调用适配层。
 
@@ -348,7 +376,7 @@ Agent 页面维护内存中的事件列表，不写 Chat 消息接口。页面�
 
 ### Agent 配置变更
 
-新会话使用最新 Agent Version/Environment；本地 Chat 的 `meta.agentapi` 保存旧会话快照，历史会话继续指向原 Session，不受后续配置修改影响。
+每次新建 Session 都只传当前默认 profile 的 Agent ID 和 Environment ID，并省略 Version，因此由 AgentAPI 使用创建当时的最新 Agent Version。Open WebUI 从创建响应读取实际 `agent.version`，保存到本地 Chat 的 `meta.agentapi.agent_version`，但绝不把它回写到 `agent_profile`。历史会话继续指向原 Session 并保留创建时快照，不受 Agent 发布新版本、默认 profile 切换或配置修改影响。
 
 ### 禁用 Agent
 
@@ -386,16 +414,19 @@ Session 文件随上游 Session 生命周期处理，Open WebUI 不执行本地�
 
 1. 增加 `chat.mode`，默认值为 `chat`，现有 Chat 数据全部保持不变。
 2. 增加 `user_id + mode + updated_at` 索引，支持 Agent 列表筛选。
-3. 不创建 Agent 消息、事件、run、artifact 数据表。
-4. Agent Chat 的 `chat_message` 双写和普通 Chat 编辑接口必须禁止。
-5. 导入、clone、fork、share 等入口必须拒绝 Agent 会话，避免模式转换或泄露上游 Session。
-6. 现有 Docker 单实例继续使用 `/app/backend/data/webui.db`；不增加 Redis、对象存储或新的容器依赖。
+3. 新增 `agent_profile` 表，并在 Config 中增加 `agentapi.default_profile_id`；第一版只创建并展示一个默认 profile。
+4. 使用现有 `access_grant` 表保存 `resource_type='agent_profile'` 的用户/组授权，不把 grants 写进 profile JSON。
+5. 不创建 Agent 消息、事件、run、artifact 数据表。
+6. Agent Chat 的 `chat_message` 双写和普通 Chat 编辑接口必须禁止。
+7. 导入、clone、fork、share 等入口必须拒绝 Agent 会话，避免模式转换或泄露上游 Session。
+8. 现有 Docker 单实例继续使用 `/app/backend/data/webui.db`；不增加 Redis、对象存储或新的容器依赖。
 
 ## 14. 测试计划
 
 ### 14.1 AgentAPI 契约测试
 
 - 创建、查询和删除 Session。
+- 创建 Session 时省略 `agent.version`，断言响应包含实际版本，并将其作为 Chat 快照而不是 profile 配置保存。
 - 同一 Session 连续提交多条消息。
 - 事件分页游标、重复事件、终态和服务端重启后的继续查询。
 - 使用 `created_at[gte]` 重叠查询时不遗漏同时间戳事件，重复事件能按 ID 更新且轮询请求不重叠。
@@ -427,7 +458,7 @@ Session 文件随上游 Session 生命周期处理，Open WebUI 不执行本地�
 
 ### 阶段 1：轻量后端代理
 
-增加 `chat.mode`、Agent 配置、profile grant、Session 创建、事件分页、状态查询和 Session FileAPI 代理。
+增加 `chat.mode`、`agent_profile` 表、默认 profile 指针、profile grant、无 Version 的 Session 创建、事件分页、状态查询和 Session FileAPI 代理。
 
 ### 阶段 2：Agent 前端
 

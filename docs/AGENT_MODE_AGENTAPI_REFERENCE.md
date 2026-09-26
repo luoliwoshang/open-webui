@@ -1,6 +1,6 @@
 # Open WebUI Agent 模式 AgentAPI 接口契约
 
-本文是 Open WebUI Agent 模式后端适配器使用的七牛 AgentAPI 接口参考。接口和响应结构来自 `https://agent.qiniuapi.com` 的实际测试，测试日期为 2026-09-24。
+本文是 Open WebUI Agent 模式后端适配器使用的七牛 AgentAPI 接口参考。接口和响应结构来自 `https://agent.qiniuapi.com` 的实际测试，测试日期为 2026-09-24 和 2026-09-26。
 
 本文只记录 Open WebUI 当前方案需要的上游接口，不包含 Open WebUI 自己的 `/api/v1/agentapi/*` 路由设计。响应中的字段可能随 Agent 配置增加，适配器应保留未知字段，不能依赖未列出的字段。
 
@@ -42,7 +42,7 @@ client = Anthropic(
 )
 
 session = client.beta.sessions.create(
-    agent={"type": "agent", "id": agent_id, "version": agent_version},
+    agent={"type": "agent", "id": agent_id},
     environment_id=environment_id,
 )
 
@@ -191,8 +191,8 @@ POST /v1/sessions
 ```json
 {
   "agent": {
-    "id": "agt_23e6d8a187ac4382bf9665a9",
-    "version": 4
+    "type": "agent",
+    "id": "agt_23e6d8a187ac4382bf9665a9"
   },
   "environment_id": "env_75ab58e00b7e4af1bf0153d9",
   "metadata": {
@@ -202,7 +202,13 @@ POST /v1/sessions
 }
 ```
 
-`agent.id`、`agent.version` 和 `environment_id` 使用创建 Agent 配置时的快照值。`metadata` 可以写入 Open WebUI 的本地关联信息，但不能写入 API Key 或敏感内容。
+Open WebUI 使用默认 profile 中的 `agent.id` 和 `environment_id`，但创建请求不发送 `agent.version`。AgentAPI 会把它解析为创建时的最新版本，并在 Session 响应的 `agent.version` 中返回实际值。Open WebUI 将响应中的版本保存为 Chat 会话快照，不把它回写成 profile 配置。`metadata` 可以写入 Open WebUI 的本地关联信息，但不能写入 API Key 或敏感内容。
+
+### 省略 Version 的实测
+
+2026-09-26 使用 Agent `agt_23e6d8a187ac4382bf9665a9` 和 Environment `env_75ab58e00b7e4af1bf0153d9` 创建 Session，请求的 `agent` 只有 `type` 和 `id`，未传 `version`。创建出的 Session `ses_eb9ae0fba1dc41c08fec6152` 返回 `agent.version: 5`，与当时该 Agent 的最新版本一致，并返回 `uses_latest: true`。
+
+因此当前产品约定为：管理端不展示或保存 Version；每次创建 Session 都省略 Version；创建响应中的 Version 是该会话唯一可信的版本快照。该测试 Session 按测试要求保留，未删除。
 
 ### 响应 `200`
 
@@ -476,7 +482,7 @@ AgentAPI 的 Session archive 会改变上游会话生命周期并禁止继续发
 - Agent、Environment、Skill 的发现和下拉列表接口；
 - 上游主动 SSE/Realtime 通道。
 
-第一版只接受文本输入并读取 Session 输出文件，不提供输入文件上传或挂载能力。Agent 配置保存管理员填写的 ID，页面使用事件分页轮询，超时提交不自动重试。若后续确认产品需要，再把这些能力作为兼容增强加入适配器。
+第一版只接受文本输入并读取 Session 输出文件，不提供输入文件上传或挂载能力。默认 Agent profile 保存管理员填写的 Agent ID 和 Environment ID，不保存 Version；页面使用事件分页轮询，超时提交不自动重试。若后续确认产品需要，再把这些能力作为兼容增强加入适配器。
 
 ## 12. Open WebUI 适配器映射
 
