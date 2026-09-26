@@ -18,6 +18,7 @@ Agent 与 Chat 是两种平级会话模式，但 Agent 的消息、状态和文�
 6. 第一版只支持文本输入，不提供输入文件上传或 Session resource 挂载；Agent 输出文件仍通过对应 Session 的 FileAPI 实时列举、预览和流式下载，不使用本地 FileAPI、`file` 表或对象存储。
 7. API Key 始终只存在于后端配置和后端到 AgentAPI 的请求中。
 8. Open WebUI 的归档只修改本地 `chat.archived`，不归档、中断或修改上游 AgentAPI Session；取消归档后仍可继续访问原 Session。
+9. 管理员可以全局只读所有用户的 Agent 会话、事件、状态、输出文件和用量，但不能代替会话 owner 发送消息或中断任务。
 
 目前已通过七牛 AgentAPI 测试接口确认：
 
@@ -39,7 +40,7 @@ Session 和 FileAPI 按长期保留前提使用。正式接入前仍需确认消
 | `Chat.mode` | 区分 `chat` 与 `agent` |
 | `models/config.py` 的 Config | 保存 AgentAPI 地址、启用状态、Key 掩码状态和 Agent 配置 |
 | `access_grant`、Groups | 控制 Agent 查看/使用权限 |
-| `ENABLE_ADMIN_CHAT_ACCESS` | 控制管理员查看员工 Agent 会话的范围 |
+| `ENABLE_ADMIN_CHAT_ACCESS` | 不限制 Agent 会话；Agent 模式明确允许管理员全局只读所有用户会话 |
 | `AuditLoggingMiddleware` | 记录配置、查看、文件下载、删除和管理行为 |
 | `models/files.py`、`routers/files.py` | 不用于 Agent 文件内容；只借鉴现有预览和鉴权交互 |
 | Socket.IO | Agent v1 不依赖；实时性由事件分页轮询实现 |
@@ -249,9 +250,12 @@ Open WebUI 不写本地文件、不写 `file` 表、不上传对象存储，也�
 ### 8.2 会话权限
 
 - 普通用户只能访问自己 `user_id` 对应的 Agent Chat。
-- 管理员使用现有 `ENABLE_ADMIN_CHAT_ACCESS` 和 Chat 管理范围读取员工 Agent Chat。
+- 管理员可以列出并读取所有用户的 Agent Chat，不受 owner、Agent profile grant 或 `ENABLE_ADMIN_CHAT_ACCESS` 限制；只读范围包括本地会话元数据、上游 Session 状态、完整事件、输出文件、`usage` 和 `stats`。
+- 管理员查看他人会话时是全局只读审计角色，不能代替 owner 发送消息或调用 interrupt；即使管理员拥有对应 Agent profile 的 `write` grant，也不能绕过该限制。管理员访问自己创建的 Agent Chat 时仍按 owner 权限处理。
+- 管理员对他人会话的归档、删除或其他修改不由全局只读权限自动放行；如后续需要运维处置，应增加独立权限和明确的管理入口。
 - 任何 Agent 事件、状态和文件路由都必须通过本地 Chat ID 查找绑定，不接受客户端直接指定上游 Session ID。
 - 文件权限以“本地 Chat 可读 + FileAPI 文件属于该 Session”为双重条件。
+- 管理员读取他人事件、状态、用量或输出文件时记录 actor、owner、`chat_id` 和操作类型，但不记录消息正文、API Key 或完整文件内容。
 
 ### 8.3 Chat/Agent 边界
 
@@ -267,7 +271,7 @@ Open WebUI 不写本地文件、不写 `file` 表、不上传对象存储，也�
 - 标题、置顶、文件夹；
 - 归档和取消归档只更新本地 `chat.archived`，不得调用 AgentAPI 的归档、中断或删除接口；
 - 删除仍按 Agent 会话删除流程先删除上游 Session，再删除本地索引；
-- 管理员按现有范围查看；
+- 管理员全局只读查看所有用户的 Agent 会话；
 - 审计记录和必要的内容导出。
 
 ### 8.4 API Key
@@ -285,15 +289,16 @@ POST   /api/v1/agentapi/config                 # 管理员
 POST   /api/v1/agentapi/config/verify          # 管理员
 GET    /api/v1/agentapi/profiles               # 当前用户可用 Agent
 
+GET    /api/v1/agentapi/chats                  # 普通用户列出自己的；管理员列出所有用户的
 POST   /api/v1/agentapi/chats                  # 创建 Agent Chat + 上游 Session
-GET    /api/v1/agentapi/chats/{chat_id}/status # 代理 Session 状态
-GET    /api/v1/agentapi/chats/{chat_id}/events?cursor=&limit=
-POST   /api/v1/agentapi/chats/{chat_id}/messages
-POST   /api/v1/agentapi/chats/{chat_id}/interrupt
-GET    /api/v1/agentapi/chats/{chat_id}/files
-GET    /api/v1/agentapi/chats/{chat_id}/files/{file_id}/content
-POST   /api/v1/chats/{chat_id}/archive          # 仅切换本地 archived，不调用上游
-DELETE /api/v1/chats/{chat_id}                 # 先删上游 Session，再删本地索引
+GET    /api/v1/agentapi/chats/{chat_id}/status # owner 或管理员只读
+GET    /api/v1/agentapi/chats/{chat_id}/events?cursor=&limit= # owner 或管理员只读
+POST   /api/v1/agentapi/chats/{chat_id}/messages  # 仅 owner
+POST   /api/v1/agentapi/chats/{chat_id}/interrupt # 仅 owner
+GET    /api/v1/agentapi/chats/{chat_id}/files     # owner 或管理员只读
+GET    /api/v1/agentapi/chats/{chat_id}/files/{file_id}/content # owner 或管理员只读
+POST   /api/v1/chats/{chat_id}/archive          # 仅 owner；只切换本地 archived
+DELETE /api/v1/chats/{chat_id}                 # 仅 owner；先删上游 Session，再删本地索引
 ```
 
 事件接口使用上游 `next_page` 作为下一次请求的 `page` 参数，不要求 Open WebUI 生成新的本地 sequence。文件接口使用 `scope_id` 查询 Session 文件，并在下载前再次校验返回 metadata 的 `scope.id`。所有路由先通过本地 Chat ID 进行身份和权限判断，再调用适配层。
@@ -393,7 +398,9 @@ Session 文件随上游 Session 生命周期处理，Open WebUI 不执行本地�
 - `read` 用户不能创建或发送。
 - `write` 用户只能使用被授权 Agent。
 - 普通用户不能用别人的本地 Chat ID 读取事件或文件。
-- 管理员只能按现有 Chat 管理范围查看员工记录。
+- 管理员可以列出所有用户的 Agent Chat，并读取任意员工会话的状态、完整事件、输出文件、`usage` 和 `stats`。
+- 管理员不能向他人的 Agent Chat 发送消息或调用 interrupt；管理员自己的 Agent Chat 仍按 owner 权限处理。
+- 管理员读取他人会话和下载输出文件会生成审计记录，审计内容不包含消息正文、API Key 或文件内容。
 - 伪造上游 Session ID、file ID 和文件路径均不能越权。
 
 ### 14.3 生命周期测试
